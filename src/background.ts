@@ -1,5 +1,6 @@
 import {
   addDomainToState,
+  getActiveBlockedSites,
   applyPendingRemovalsToState,
   applyPendingSettingsToState,
   buildDynamicRules,
@@ -173,7 +174,12 @@ async function ensureAlarm(): Promise<void> {
 }
 
 async function syncRules(blockedSites?: string[]): Promise<void> {
-  const domains = blockedSites ?? (await readStorage()).blockedSites;
+  const storage = await readStorage();
+  const domains = getActiveBlockedSites(
+    blockedSites ?? storage.blockedSites,
+    storage.blockWindows,
+    new Date(),
+  );
   const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
 
   await chrome.declarativeNetRequest.updateDynamicRules({
@@ -182,24 +188,18 @@ async function syncRules(blockedSites?: string[]): Promise<void> {
   });
 }
 
-function blockedSitesChanged(previous: StorageSchema, next: StorageSchema): boolean {
-  return JSON.stringify(previous.blockedSites) !== JSON.stringify(next.blockedSites);
-}
-
 async function reconcilePending(): Promise<StorageSchema> {
   const storage = await readStorage();
   const afterRemovals = applyPendingRemovalsToState(storage);
   const afterSettings = applyPendingSettingsToState(afterRemovals);
 
   if (afterSettings === storage) {
+    await syncRules(storage.blockedSites);
     return storage;
   }
 
   await writeStorage(afterSettings);
-
-  if (blockedSitesChanged(storage, afterSettings)) {
-    await syncRules(afterSettings.blockedSites);
-  }
+  await syncRules(afterSettings.blockedSites);
 
   return afterSettings;
 }
@@ -207,8 +207,7 @@ async function reconcilePending(): Promise<StorageSchema> {
 async function bootstrapBackground(): Promise<void> {
   await ensureStorageDefaults();
   await ensureAlarm();
-  const storage = await reconcilePending();
-  await syncRules(storage.blockedSites);
+  await reconcilePending();
 }
 
 function errorResponse(error: string): ErrorResponse {
@@ -353,6 +352,7 @@ async function handleUpdateSettings(
   };
 
   await writeStorage(nextStorage);
+  await syncRules(nextStorage.blockedSites);
   return { ok: true, appliedImmediately: true, applyAt: null };
 }
 

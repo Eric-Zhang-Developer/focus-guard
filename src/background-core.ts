@@ -52,6 +52,14 @@ export function isInBlockWindow(
   return getCurrentBlockWindow(now, windows) !== null;
 }
 
+export function getActiveBlockedSites(
+  blockedSites: string[],
+  windows: BlockWindow[] = DEFAULT_BLOCK_WINDOWS,
+  now: Date = new Date(),
+): string[] {
+  return isInBlockWindow(now, windows) ? blockedSites : [];
+}
+
 export function buildDynamicRules(domains: string[]): chrome.declarativeNetRequest.Rule[] {
   const normalizedDomains = [...new Set(domains.map(normalizeDomain).filter(isLikelyDomain))];
 
@@ -93,6 +101,7 @@ export function addDomainToState(storage: StorageSchema, domain: string): Storag
   }
 
   return {
+    ...storage,
     blockedSites,
     pendingRemovals,
   };
@@ -113,6 +122,7 @@ export function removeDomainFromState(storage: StorageSchema, domain: string): S
   }
 
   return {
+    ...storage,
     blockedSites,
     pendingRemovals,
   };
@@ -148,6 +158,7 @@ export function queuePendingRemoval(
 
   return {
     storage: {
+      ...storage,
       blockedSites: storage.blockedSites,
       pendingRemovals: [...storage.pendingRemovals, pendingRemoval],
     },
@@ -166,6 +177,7 @@ export function cancelPendingRemoval(storage: StorageSchema, domain: string): St
   }
 
   return {
+    ...storage,
     blockedSites: storage.blockedSites,
     pendingRemovals,
   };
@@ -183,9 +195,9 @@ export function isWeakeningSettingsChange(
     return true;
   }
 
-  // Check if any existing window was modified (by comparing serialized values)
-  const currentSerialized = current.blockWindows.map((w) => JSON.stringify(w));
-  return proposed.blockWindows.some((w) => !currentSerialized.includes(JSON.stringify(w)));
+  // Check if any existing window was removed or modified (by comparing serialized values)
+  const proposedSerialized = proposed.blockWindows.map((w) => JSON.stringify(w));
+  return current.blockWindows.some((w) => !proposedSerialized.includes(JSON.stringify(w)));
 }
 
 export function queueSettingsChange(
@@ -251,6 +263,7 @@ export function applyPendingRemovalsToState(
   }
 
   return {
+    ...storage,
     blockedSites: storage.blockedSites.filter((blockedSite) => !expiredDomains.has(blockedSite)),
     pendingRemovals: storage.pendingRemovals.filter(
       (pendingRemoval) => pendingRemoval.applyAt > nowMs,

@@ -26,7 +26,6 @@ function fmtCountdown(msRemaining: number): string {
 }
 
 const DAY_ABBR = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-const DAY_ABBR_SHORT = ["S", "M", "T", "W", "T", "F", "S"];
 
 function fmtDays(days: DayOfWeek[]): string {
   const sorted = [...days].sort((a, b) => a - b);
@@ -38,7 +37,7 @@ function fmtDays(days: DayOfWeek[]): string {
 }
 
 function fmtWindow(w: BlockWindow): string {
-  return `${fmtDays(w.days as DayOfWeek[])}  ${fmtTime(w.startHour, w.startMin)}–${fmtTime(w.endHour, w.endMin)}`;
+  return `${fmtDays(w.days as DayOfWeek[])}  ·  ${fmtTime(w.startHour, w.startMin)}–${fmtTime(w.endHour, w.endMin)}`;
 }
 
 function normalizeDomainInput(raw: string): string {
@@ -91,9 +90,11 @@ function renderSites(s: GetStateResponse): void {
   const list = document.getElementById("sites-list")!;
   const empty = document.getElementById("sites-empty")!;
   const addRow = document.getElementById("add-site-row")!;
+  const note = document.getElementById("block-window-note")!;
 
   list.innerHTML = "";
   addRow.classList.toggle("hidden", s.isBlocking);
+  note.classList.toggle("hidden", !s.isBlocking);
 
   const banner = document.getElementById("block-banner")!;
   if (s.isBlocking && s.activeWindow) {
@@ -240,6 +241,13 @@ function renderSchedule(s: GetStateResponse): void {
 
   const delayInput = document.getElementById("delay-input") as HTMLInputElement;
   delayInput.value = String(Math.round(s.frictionDelayMs / 60000));
+
+  // Dim schedule controls when a pending change is queued
+  const locked = s.pendingSettingsChange !== null;
+  document.getElementById("windows-list")!.classList.toggle("opacity-40 pointer-events-none", locked);
+  document.getElementById("add-window-details")!.classList.toggle("opacity-40 pointer-events-none", locked);
+  const delaySection = document.querySelector<HTMLElement>(".border-t.border-slate-700\\/40");
+  delaySection?.classList.toggle("opacity-40 pointer-events-none", locked);
 }
 
 function renderWindows(s: GetStateResponse): void {
@@ -371,7 +379,7 @@ function renderPendingSettings(pending: PendingSettingsChange | null): void {
 
 // ── add window form ────────────────────────────────────────────────────────────
 
-function initAddWindowForm(s: GetStateResponse): void {
+function initAddWindowForm(): void {
   const dayBtns = document.querySelectorAll<HTMLButtonElement>(".day-btn");
   dayBtns.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -434,8 +442,8 @@ function initAddWindowForm(s: GetStateResponse): void {
 
     await sendMessage({
       type: "UPDATE_SETTINGS",
-      blockWindows: [...s.blockWindows, newWindow],
-      frictionDelayMs: s.frictionDelayMs,
+      blockWindows: [...state!.blockWindows, newWindow],
+      frictionDelayMs: state!.frictionDelayMs,
     });
 
     // reset form
@@ -454,7 +462,7 @@ function initAddWindowForm(s: GetStateResponse): void {
 
 // ── delay controls ─────────────────────────────────────────────────────────────
 
-function initDelayControls(s: GetStateResponse): void {
+function initDelayControls(): void {
   const saveBtn = document.getElementById("delay-save-btn")!;
   const delayInput = document.getElementById("delay-input") as HTMLInputElement;
   const errEl = document.getElementById("delay-error")!;
@@ -472,13 +480,13 @@ function initDelayControls(s: GetStateResponse): void {
       return;
     }
 
+    const s = state!;
     const newDelayMs = minutes * 60000;
     const isWeakening = newDelayMs < s.frictionDelayMs;
 
     if (isWeakening && s.isBlocking) {
       reasonRow.classList.remove("hidden");
 
-      // Store the intended new delay for when confirm is clicked
       confirmBtn.onclick = async () => {
         const reason = reasonInput.value.trim();
         if (!reason) {
@@ -544,6 +552,9 @@ function initAddSite(): void {
     }
 
     input.value = "";
+    const addRow = document.getElementById("add-site-row")!;
+    addRow.classList.add("bg-green-500/10", "rounded-lg", "transition-colors");
+    setTimeout(() => addRow.classList.remove("bg-green-500/10"), 1000);
     await reload();
   };
 
@@ -587,8 +598,6 @@ async function reload(): Promise<void> {
   renderStatusDot(state);
   renderSites(state);
   renderSchedule(state);
-  initAddWindowForm(state);
-  initDelayControls(state);
 }
 
 document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
@@ -599,5 +608,7 @@ document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
 
 initAddSite();
 initCancelSettings();
+initAddWindowForm();
+initDelayControls();
 
 void reload();
