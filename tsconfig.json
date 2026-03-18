@@ -9,9 +9,10 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "strict": true,
+    "skipLibCheck": true,
     "noEmit": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["chrome"]
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["chrome", "node"]
   },
   "include": ["src", "vite.config.ts"]
 }
