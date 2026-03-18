@@ -4,52 +4,44 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Focus Guard</title>
+    <link rel="stylesheet" href="/src/blocked.css" />
     <style>
-      :root {
-        color-scheme: dark;
-        font-family: "SF Mono", "Menlo", monospace;
-      }
-
       body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
         background:
-          radial-gradient(circle at top, rgba(253, 186, 116, 0.22), transparent 40%),
-          linear-gradient(180deg, #0f172a 0%, #020617 100%);
-        color: #e2e8f0;
-      }
-
-      main {
-        width: min(560px, calc(100vw - 48px));
-        padding: 32px;
-        border: 1px solid rgba(148, 163, 184, 0.24);
-        border-radius: 24px;
-        background: rgba(15, 23, 42, 0.78);
-        box-shadow: 0 30px 80px rgba(2, 6, 23, 0.4);
-      }
-
-      h1,
-      p {
-        margin: 0;
-      }
-
-      h1 {
-        font-size: clamp(1.8rem, 4vw, 2.6rem);
-      }
-
-      p {
-        margin-top: 12px;
-        line-height: 1.6;
-        color: #cbd5e1;
+          radial-gradient(ellipse 80% 40% at 50% -10%, rgba(251, 191, 36, 0.15), transparent),
+          #020617;
       }
     </style>
   </head>
-  <body>
-    <main>
-      <h1>Focus Guard is active.</h1>
-      <p>Blocked-page details arrive in Phase 3. This placeholder confirms MV3 redirects can target an extension page.</p>
+  <body class="min-h-screen flex items-center justify-center font-sans">
+    <main class="w-full max-w-lg mx-6 px-10 py-9 rounded-2xl border border-white/10 bg-slate-900/75 backdrop-blur-sm shadow-2xl">
+
+      <!-- Header row: red dot + domain -->
+      <div class="flex items-center gap-3 mb-5">
+        <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_2px_rgba(239,68,68,0.5)]"></span>
+        <h1
+          id="domain"
+          class="font-mono text-3xl font-bold text-white tracking-tight truncate"
+        >—</h1>
+      </div>
+
+      <!-- Block window info (hidden until JS populates) -->
+      <div id="window-info" class="hidden mb-6">
+        <p class="text-sm text-slate-400 tracking-wide">
+          <span id="window-label"></span>
+          <span class="mx-1.5 text-slate-600">·</span>
+          <span id="window-end"></span>
+        </p>
+      </div>
+
+      <hr class="border-white/8 mb-6" />
+
+      <!-- Motivational line -->
+      <p class="text-slate-500 italic text-sm leading-relaxed">
+        You set this up for a reason.
+      </p>
+
     </main>
+    <script type="module" src="/src/blocked.ts"></script>
   </body>
 </html>

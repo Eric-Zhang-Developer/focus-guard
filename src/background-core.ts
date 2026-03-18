@@ -61,7 +61,7 @@ export function buildDynamicRules(domains: string[]): chrome.declarativeNetReque
     action: {
       type: REDIRECT_ACTION,
       redirect: {
-        extensionPath: "/blocked.html",
+        extensionPath: `/blocked.html?domain=${encodeURIComponent(domain)}`,
       },
     },
     condition: {
