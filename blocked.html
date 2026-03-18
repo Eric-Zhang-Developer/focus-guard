@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Focus Guard</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      :root { color-scheme: dark; }
+
+      body {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: system-ui, -apple-system, sans-serif;
+        color: #f1f5f9;
+        background:
+          radial-gradient(ellipse 80% 40% at 50% -10%, rgba(251, 191, 36, 0.15), transparent),
+          #020617;
+      }
+
+      main {
+        width: min(480px, calc(100vw - 48px));
+        padding: 36px 40px;
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(15, 23, 42, 0.75);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 32px 80px rgba(2, 6, 23, 0.5);
+      }
+
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .dot {
+        flex-shrink: 0;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #ef4444;
+        box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.5);
+      }
+
+      h1 {
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: clamp(1.5rem, 4vw, 2rem);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: #ffffff;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .window-info {
+        display: none;
+        font-size: 13px;
+        color: #94a3b8;
+        letter-spacing: 0.01em;
+        margin-bottom: 20px;
+      }
+
+      .window-info.visible { display: block; }
+
+      .sep {
+        color: #334155;
+        margin: 0 6px;
+      }
+
+      hr {
+        border: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.07);
+        margin-bottom: 20px;
+      }
+
+      .message {
+        font-size: 13px;
+        color: #475569;
+        font-style: italic;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="header">
+        <span class="dot"></span>
+        <h1 id="domain">—</h1>
+      </div>
+
+      <div id="window-info" class="window-info">
+        <span id="window-label"></span>
+        <span class="sep">·</span>
+        <span id="window-end"></span>
+      </div>
+
+      <hr />
+
+      <p class="message">You set this up for a reason.</p>
+    </main>
+
+    <script type="module">
+      const params = new URLSearchParams(window.location.search);
+      const domain = params.get("domain");
+
+      if (domain) {
+        document.getElementById("domain").textContent = domain;
+      }
+
+      function pad(n) {
+        return String(n).padStart(2, "0");
+      }
+
+      function getCurrentBlockWindow(blockWindows) {
+        const now = new Date();
+        const day = now.getDay();
+        const totalMin = now.getHours() * 60 + now.getMinutes();
+        return blockWindows.find(w =>
+          w.days.includes(day) &&
+          totalMin >= w.startHour * 60 + w.startMin &&
+          totalMin < w.endHour * 60 + w.endMin
+        ) ?? null;
+      }
+
+      chrome.storage.sync.get(["blockWindows"], (items) => {
+        const blockWindows = Array.isArray(items.blockWindows) ? items.blockWindows : [];
+        const active = getCurrentBlockWindow(blockWindows);
+
+        if (active) {
+          document.getElementById("window-label").textContent = active.label;
+          document.getElementById("window-end").textContent =
+            `ends at ${pad(active.endHour)}:${pad(active.endMin)}`;
+          document.getElementById("window-info").classList.add("visible");
+        }
+      });
+    </script>
+  </body>
+</html>
