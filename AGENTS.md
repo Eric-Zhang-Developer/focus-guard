@@ -57,6 +57,7 @@ Document this clearly in the popup ("Schedule is set in config.ts").
 ```
 TypeScript (strict)
 Vite + @crxjs/vite-plugin     — build + hot reload
+Tailwind CSS v4 (PostCSS)      — utility classes in popup.html, no separate popup.css needed
 Chrome Extension Manifest V3
 declarativeNetRequest API      — network-level blocking (efficient, no page injection needed)
 chrome.storage.sync            — persists blocklist + pending changes across devices
@@ -80,8 +81,7 @@ focus-guard/
 │   ├── types.ts               — shared TypeScript types
 │   └── popup/
 │       ├── popup.html
-│       ├── popup.ts
-│       └── popup.css
+│       └── popup.ts
 ├── blocked.html               — shown instead of blocked site
 ├── rules.json                 — empty array, baseline for declarativeNetRequest
 ├── icons/
@@ -329,10 +329,11 @@ You set this up for a reason.
 ```ts
 import { defineConfig } from "vite";
 import { crx } from "@crxjs/vite-plugin";
+import tailwindcss from "@tailwindcss/vite";
 import manifest from "./manifest.json";
 
 export default defineConfig({
-  plugins: [crx({ manifest })],
+  plugins: [tailwindcss(), crx({ manifest })],
 });
 ```
 
@@ -350,7 +351,9 @@ export default defineConfig({
     "typescript": "^5",
     "vite": "^5",
     "@crxjs/vite-plugin": "^2",
-    "@types/chrome": "^0"
+    "@types/chrome": "^0",
+    "tailwindcss": "^4",
+    "@tailwindcss/vite": "^4"
   }
 }
 ```
