@@ -1,6 +1,6 @@
 import type { BlockWindow } from "./types";
 
-export const BLOCK_WINDOWS: BlockWindow[] = [
+export const DEFAULT_BLOCK_WINDOWS: BlockWindow[] = [
   {
     label: "Deep Work Morning",
     days: [1, 2, 3, 4, 5],
@@ -19,6 +19,4 @@ export const BLOCK_WINDOWS: BlockWindow[] = [
   },
 ];
 
-export const FRICTION_DELAY_MS = 10 * 60 * 1000;
-
-export const SCHEDULE_SOURCE_NOTE = "Schedule is set in config.ts";
+export const DEFAULT_FRICTION_DELAY_MS = 10 * 60 * 1000;

@@ -1,5 +1,5 @@
-import { BLOCK_WINDOWS, FRICTION_DELAY_MS } from "./config";
-import type { BlockWindow, PendingRemoval, StorageSchema } from "./types";
+import { DEFAULT_BLOCK_WINDOWS, DEFAULT_FRICTION_DELAY_MS } from "./config";
+import type { BlockWindow, PendingRemoval, PendingSettingsChange, StorageSchema } from "./types";
 
 const REDIRECT_ACTION = "redirect" as chrome.declarativeNetRequest.RuleActionType;
 const MAIN_FRAME_RESOURCE =
@@ -26,7 +26,7 @@ export function isLikelyDomain(domain: string): boolean {
 
 export function getCurrentBlockWindow(
   now: Date = new Date(),
-  windows: BlockWindow[] = BLOCK_WINDOWS,
+  windows: BlockWindow[] = DEFAULT_BLOCK_WINDOWS,
 ): BlockWindow | null {
   const day = now.getDay();
   const currentMinutes = toMinutes(now.getHours(), now.getMinutes());
@@ -47,7 +47,7 @@ export function getCurrentBlockWindow(
 
 export function isInBlockWindow(
   now: Date = new Date(),
-  windows: BlockWindow[] = BLOCK_WINDOWS,
+  windows: BlockWindow[] = DEFAULT_BLOCK_WINDOWS,
 ): boolean {
   return getCurrentBlockWindow(now, windows) !== null;
 }
@@ -123,7 +123,7 @@ export function queuePendingRemoval(
   domain: string,
   reason: string,
   nowMs: number = Date.now(),
-  delayMs: number = FRICTION_DELAY_MS,
+  delayMs: number = DEFAULT_FRICTION_DELAY_MS,
 ): { storage: StorageSchema; applyAt: number } {
   const normalizedDomain = normalizeDomain(domain);
   const existingPendingRemoval = storage.pendingRemovals.find(
@@ -168,6 +168,71 @@ export function cancelPendingRemoval(storage: StorageSchema, domain: string): St
   return {
     blockedSites: storage.blockedSites,
     pendingRemovals,
+  };
+}
+
+export function isWeakeningSettingsChange(
+  current: StorageSchema,
+  proposed: { blockWindows: BlockWindow[]; frictionDelayMs: number },
+): boolean {
+  if (proposed.frictionDelayMs < current.frictionDelayMs) {
+    return true;
+  }
+
+  if (proposed.blockWindows.length < current.blockWindows.length) {
+    return true;
+  }
+
+  // Check if any existing window was modified (by comparing serialized values)
+  const currentSerialized = current.blockWindows.map((w) => JSON.stringify(w));
+  return proposed.blockWindows.some((w) => !currentSerialized.includes(JSON.stringify(w)));
+}
+
+export function queueSettingsChange(
+  storage: StorageSchema,
+  blockWindows: BlockWindow[],
+  frictionDelayMs: number,
+  reason: string,
+  nowMs: number = Date.now(),
+): { storage: StorageSchema; applyAt: number } {
+  const applyAt = nowMs + storage.frictionDelayMs;
+  const pendingSettingsChange: PendingSettingsChange = {
+    blockWindows,
+    frictionDelayMs,
+    reason: reason.trim(),
+    scheduledAt: nowMs,
+    applyAt,
+  };
+
+  return {
+    storage: { ...storage, pendingSettingsChange },
+    applyAt,
+  };
+}
+
+export function cancelSettingsChange(storage: StorageSchema): StorageSchema {
+  if (storage.pendingSettingsChange === null) {
+    return storage;
+  }
+
+  return { ...storage, pendingSettingsChange: null };
+}
+
+export function applyPendingSettingsToState(
+  storage: StorageSchema,
+  nowMs: number = Date.now(),
+): StorageSchema {
+  const pending = storage.pendingSettingsChange;
+
+  if (pending === null || pending.applyAt > nowMs) {
+    return storage;
+  }
+
+  return {
+    ...storage,
+    blockWindows: pending.blockWindows,
+    frictionDelayMs: pending.frictionDelayMs,
+    pendingSettingsChange: null,
   };
 }
 
