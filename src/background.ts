@@ -35,6 +35,7 @@ import type {
 
 const APPLY_PENDING_ALARM = "focus-guard-apply-pending";
 const BLOCKED_PAGE_PATH = "/blocked.html";
+const LAST_KNOWN_BLOCKING_STATE_KEY = "lastKnownBlockingState";
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -132,6 +133,19 @@ async function readStorage(): Promise<StorageSchema> {
 
 async function writeStorage(storage: StorageSchema): Promise<void> {
   await chrome.storage.sync.set(storage);
+}
+
+async function readLastKnownBlockingState(): Promise<boolean | null> {
+  const runtimeState = await chrome.storage.local.get(LAST_KNOWN_BLOCKING_STATE_KEY);
+  const value = runtimeState[LAST_KNOWN_BLOCKING_STATE_KEY];
+
+  return typeof value === "boolean" ? value : null;
+}
+
+async function writeLastKnownBlockingState(isBlocking: boolean): Promise<void> {
+  await chrome.storage.local.set({
+    [LAST_KNOWN_BLOCKING_STATE_KEY]: isBlocking,
+  });
 }
 
 async function ensureStorageDefaults(): Promise<void> {
@@ -246,6 +260,22 @@ async function enforceOpenTabs(storage?: StorageSchema): Promise<number> {
   return redirectedCount;
 }
 
+async function syncBlockingState(storage?: StorageSchema): Promise<StorageSchema> {
+  const currentStorage = storage ?? (await reconcilePending());
+  const isBlockingNow = isInBlockWindow(new Date(), currentStorage.blockWindows);
+  const wasBlocking = await readLastKnownBlockingState();
+
+  if (isBlockingNow && wasBlocking !== true) {
+    await enforceOpenTabs(currentStorage);
+  }
+
+  if (wasBlocking !== isBlockingNow) {
+    await writeLastKnownBlockingState(isBlockingNow);
+  }
+
+  return currentStorage;
+}
+
 async function reconcilePending(): Promise<StorageSchema> {
   const storage = await readStorage();
   const afterRemovals = applyPendingRemovalsToState(storage);
@@ -265,7 +295,8 @@ async function reconcilePending(): Promise<StorageSchema> {
 async function bootstrapBackground(): Promise<void> {
   await ensureStorageDefaults();
   await ensureAlarm();
-  await reconcilePending();
+  const storage = await reconcilePending();
+  await syncBlockingState(storage);
 }
 
 function errorResponse(error: string): ErrorResponse {
@@ -466,7 +497,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     return;
   }
 
-  void reconcilePending();
+  void reconcilePending()
+    .then((storage) => syncBlockingState(storage))
+    .catch((error: unknown) => {
+      console.error("Focus Guard alarm processing failed", error);
+    });
 });
 
 chrome.tabs.onActivated.addListener(handleTabActivated);
