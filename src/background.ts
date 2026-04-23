@@ -444,6 +444,15 @@ async function handleRuntimeMessage(message: RuntimeMessage): Promise<RuntimeRes
   }
 }
 
+function handleTabActivated(activeInfo: chrome.tabs.TabActiveInfo): void {
+  void chrome.tabs
+    .get(activeInfo.tabId)
+    .then((tab) => enforceTabIfNeeded(tab))
+    .catch((error: unknown) => {
+      console.warn("Focus Guard tab activation enforcement skipped", error);
+    });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   void bootstrapBackground();
 });
@@ -459,6 +468,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
   void reconcilePending();
 });
+
+chrome.tabs.onActivated.addListener(handleTabActivated);
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   if (!isRuntimeMessage(message)) {
