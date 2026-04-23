@@ -6,6 +6,7 @@ import {
   buildDynamicRules,
   cancelPendingRemoval,
   cancelSettingsChange,
+  getBlockedDomainForUrl,
   getCurrentBlockWindow,
   isInBlockWindow,
   isLikelyDomain,
@@ -33,6 +34,7 @@ import type {
 } from "./types";
 
 const APPLY_PENDING_ALARM = "focus-guard-apply-pending";
+const BLOCKED_PAGE_PATH = "/blocked.html";
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -186,6 +188,62 @@ async function syncRules(blockedSites?: string[]): Promise<void> {
     removeRuleIds: existingRules.map((rule) => rule.id),
     addRules: buildDynamicRules(domains),
   });
+}
+
+function getBlockedPageUrl(domain: string): string {
+  return chrome.runtime.getURL(`${BLOCKED_PAGE_PATH}?domain=${encodeURIComponent(domain)}`);
+}
+
+async function redirectTabToBlockedPage(tabId: number, domain: string): Promise<void> {
+  await chrome.tabs.update(tabId, {
+    url: getBlockedPageUrl(domain),
+  });
+}
+
+async function enforceTabIfNeeded(
+  tab: chrome.tabs.Tab,
+  storage?: StorageSchema,
+): Promise<boolean> {
+  const tabId = tab.id;
+  const tabUrl = tab.pendingUrl ?? tab.url;
+
+  if (typeof tabId !== "number" || typeof tabUrl !== "string") {
+    return false;
+  }
+
+  const currentStorage = storage ?? (await reconcilePending());
+
+  if (!isInBlockWindow(new Date(), currentStorage.blockWindows)) {
+    return false;
+  }
+
+  const matchedDomain = getBlockedDomainForUrl(tabUrl, currentStorage.blockedSites);
+
+  if (matchedDomain === null) {
+    return false;
+  }
+
+  await redirectTabToBlockedPage(tabId, matchedDomain);
+  return true;
+}
+
+async function enforceOpenTabs(storage?: StorageSchema): Promise<number> {
+  const currentStorage = storage ?? (await reconcilePending());
+
+  if (!isInBlockWindow(new Date(), currentStorage.blockWindows)) {
+    return 0;
+  }
+
+  const tabs = await chrome.tabs.query({});
+  let redirectedCount = 0;
+
+  for (const tab of tabs) {
+    if (await enforceTabIfNeeded(tab, currentStorage)) {
+      redirectedCount += 1;
+    }
+  }
+
+  return redirectedCount;
 }
 
 async function reconcilePending(): Promise<StorageSchema> {

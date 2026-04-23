@@ -8,7 +8,10 @@ import {
   applyPendingSettingsToState,
   buildDynamicRules,
   cancelSettingsChange,
+  doesHostnameMatchBlockedDomain,
+  getBlockedDomainForUrl,
   getCurrentBlockWindow,
+  getHostnameFromUrl,
   isInBlockWindow,
   isWeakeningSettingsChange,
   normalizeDomain,
@@ -25,6 +28,30 @@ function testStorage(overrides: Partial<StorageSchema> = {}): StorageSchema {
 describe("background-core", () => {
   it("normalizes domains defensively", () => {
     expect(normalizeDomain(" https://WWW.Reddit.com/r/typescript?q=1#top ")).toBe("reddit.com");
+  });
+
+  it("extracts normalized hostnames from supported tab URLs only", () => {
+    expect(getHostnameFromUrl("https://m.youtube.com/watch?v=123")).toBe("m.youtube.com");
+    expect(getHostnameFromUrl("chrome-extension://abc123/blocked.html")).toBeNull();
+    expect(getHostnameFromUrl("not a url")).toBeNull();
+  });
+
+  it("matches blocked domains against apex domains and subdomains", () => {
+    expect(doesHostnameMatchBlockedDomain("youtube.com", "youtube.com")).toBe(true);
+    expect(doesHostnameMatchBlockedDomain("m.youtube.com", "youtube.com")).toBe(true);
+    expect(doesHostnameMatchBlockedDomain("notyoutube.com", "youtube.com")).toBe(false);
+  });
+
+  it("finds the blocked domain for matching tab URLs", () => {
+    const blockedSites = ["reddit.com", "youtube.com"];
+
+    expect(getBlockedDomainForUrl("https://www.youtube.com/watch?v=123", blockedSites)).toBe(
+      "youtube.com",
+    );
+    expect(getBlockedDomainForUrl("https://reddit.com/r/typescript", blockedSites)).toBe(
+      "reddit.com",
+    );
+    expect(getBlockedDomainForUrl("https://news.ycombinator.com", blockedSites)).toBeNull();
   });
 
   it("detects whether the current time is inside a block window", () => {
