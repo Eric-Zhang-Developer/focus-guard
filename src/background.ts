@@ -6,6 +6,7 @@ import {
   buildDynamicRules,
   cancelPendingRemoval,
   cancelSettingsChange,
+  getBlockedDomainForUrl,
   getCurrentBlockWindow,
   isInBlockWindow,
   isLikelyDomain,
@@ -33,6 +34,8 @@ import type {
 } from "./types";
 
 const APPLY_PENDING_ALARM = "focus-guard-apply-pending";
+const BLOCKED_PAGE_PATH = "/blocked.html";
+const LAST_KNOWN_BLOCKING_STATE_KEY = "lastKnownBlockingState";
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -132,6 +135,19 @@ async function writeStorage(storage: StorageSchema): Promise<void> {
   await chrome.storage.sync.set(storage);
 }
 
+async function readLastKnownBlockingState(): Promise<boolean | null> {
+  const runtimeState = await chrome.storage.local.get(LAST_KNOWN_BLOCKING_STATE_KEY);
+  const value = runtimeState[LAST_KNOWN_BLOCKING_STATE_KEY];
+
+  return typeof value === "boolean" ? value : null;
+}
+
+async function writeLastKnownBlockingState(isBlocking: boolean): Promise<void> {
+  await chrome.storage.local.set({
+    [LAST_KNOWN_BLOCKING_STATE_KEY]: isBlocking,
+  });
+}
+
 async function ensureStorageDefaults(): Promise<void> {
   const existing = await chrome.storage.sync.get([
     "blockedSites",
@@ -188,6 +204,78 @@ async function syncRules(blockedSites?: string[]): Promise<void> {
   });
 }
 
+function getBlockedPageUrl(domain: string): string {
+  return chrome.runtime.getURL(`${BLOCKED_PAGE_PATH}?domain=${encodeURIComponent(domain)}`);
+}
+
+async function redirectTabToBlockedPage(tabId: number, domain: string): Promise<void> {
+  await chrome.tabs.update(tabId, {
+    url: getBlockedPageUrl(domain),
+  });
+}
+
+async function enforceTabIfNeeded(
+  tab: chrome.tabs.Tab,
+  storage?: StorageSchema,
+): Promise<boolean> {
+  const tabId = tab.id;
+  const tabUrl = tab.pendingUrl ?? tab.url;
+
+  if (typeof tabId !== "number" || typeof tabUrl !== "string") {
+    return false;
+  }
+
+  const currentStorage = storage ?? (await reconcilePending());
+
+  if (!isInBlockWindow(new Date(), currentStorage.blockWindows)) {
+    return false;
+  }
+
+  const matchedDomain = getBlockedDomainForUrl(tabUrl, currentStorage.blockedSites);
+
+  if (matchedDomain === null) {
+    return false;
+  }
+
+  await redirectTabToBlockedPage(tabId, matchedDomain);
+  return true;
+}
+
+async function enforceOpenTabs(storage?: StorageSchema): Promise<number> {
+  const currentStorage = storage ?? (await reconcilePending());
+
+  if (!isInBlockWindow(new Date(), currentStorage.blockWindows)) {
+    return 0;
+  }
+
+  const tabs = await chrome.tabs.query({});
+  let redirectedCount = 0;
+
+  for (const tab of tabs) {
+    if (await enforceTabIfNeeded(tab, currentStorage)) {
+      redirectedCount += 1;
+    }
+  }
+
+  return redirectedCount;
+}
+
+async function syncBlockingState(storage?: StorageSchema): Promise<StorageSchema> {
+  const currentStorage = storage ?? (await reconcilePending());
+  const isBlockingNow = isInBlockWindow(new Date(), currentStorage.blockWindows);
+  const wasBlocking = await readLastKnownBlockingState();
+
+  if (isBlockingNow && wasBlocking !== true) {
+    await enforceOpenTabs(currentStorage);
+  }
+
+  if (wasBlocking !== isBlockingNow) {
+    await writeLastKnownBlockingState(isBlockingNow);
+  }
+
+  return currentStorage;
+}
+
 async function reconcilePending(): Promise<StorageSchema> {
   const storage = await readStorage();
   const afterRemovals = applyPendingRemovalsToState(storage);
@@ -207,7 +295,8 @@ async function reconcilePending(): Promise<StorageSchema> {
 async function bootstrapBackground(): Promise<void> {
   await ensureStorageDefaults();
   await ensureAlarm();
-  await reconcilePending();
+  const storage = await reconcilePending();
+  await syncBlockingState(storage);
 }
 
 function errorResponse(error: string): ErrorResponse {
@@ -386,6 +475,15 @@ async function handleRuntimeMessage(message: RuntimeMessage): Promise<RuntimeRes
   }
 }
 
+function handleTabActivated(activeInfo: chrome.tabs.TabActiveInfo): void {
+  void chrome.tabs
+    .get(activeInfo.tabId)
+    .then((tab) => enforceTabIfNeeded(tab))
+    .catch((error: unknown) => {
+      console.warn("Focus Guard tab activation enforcement skipped", error);
+    });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   void bootstrapBackground();
 });
@@ -399,8 +497,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     return;
   }
 
-  void reconcilePending();
+  void reconcilePending()
+    .then((storage) => syncBlockingState(storage))
+    .catch((error: unknown) => {
+      console.error("Focus Guard alarm processing failed", error);
+    });
 });
+
+chrome.tabs.onActivated.addListener(handleTabActivated);
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   if (!isRuntimeMessage(message)) {

@@ -4,6 +4,7 @@ import type { BlockWindow, PendingRemoval, PendingSettingsChange, StorageSchema 
 const REDIRECT_ACTION = "redirect" as chrome.declarativeNetRequest.RuleActionType;
 const MAIN_FRAME_RESOURCE =
   "main_frame" as chrome.declarativeNetRequest.ResourceType;
+const TAB_MATCH_PROTOCOLS = new Set(["http:", "https:"]);
 
 function toMinutes(hour: number, minute: number): number {
   return hour * 60 + minute;
@@ -20,8 +21,48 @@ export function normalizeDomain(rawDomain: string): string {
   return domainOnly.replace(/^\.+|\.+$/g, "");
 }
 
+export function getHostnameFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!TAB_MATCH_PROTOCOLS.has(parsed.protocol)) {
+      return null;
+    }
+
+    return normalizeDomain(parsed.hostname);
+  } catch {
+    return null;
+  }
+}
+
 export function isLikelyDomain(domain: string): boolean {
   return domain.includes(".") && !/\s/.test(domain);
+}
+
+export function doesHostnameMatchBlockedDomain(hostname: string, blockedDomain: string): boolean {
+  const normalizedHostname = normalizeDomain(hostname);
+  const normalizedBlockedDomain = normalizeDomain(blockedDomain);
+
+  if (!isLikelyDomain(normalizedHostname) || !isLikelyDomain(normalizedBlockedDomain)) {
+    return false;
+  }
+
+  return (
+    normalizedHostname === normalizedBlockedDomain ||
+    normalizedHostname.endsWith(`.${normalizedBlockedDomain}`)
+  );
+}
+
+export function getBlockedDomainForUrl(url: string, blockedSites: string[]): string | null {
+  const hostname = getHostnameFromUrl(url);
+
+  if (hostname === null) {
+    return null;
+  }
+
+  return (
+    blockedSites.find((blockedSite) => doesHostnameMatchBlockedDomain(hostname, blockedSite)) ?? null
+  );
 }
 
 export function getCurrentBlockWindow(

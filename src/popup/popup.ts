@@ -244,10 +244,17 @@ function renderSchedule(s: GetStateResponse): void {
 
   // Dim schedule controls when a pending change is queued
   const locked = s.pendingSettingsChange !== null;
-  document.getElementById("windows-list")!.classList.toggle("opacity-40 pointer-events-none", locked);
-  document.getElementById("add-window-details")!.classList.toggle("opacity-40 pointer-events-none", locked);
+  const windowsList = document.getElementById("windows-list")!;
+  windowsList.classList.toggle("opacity-40", locked);
+  windowsList.classList.toggle("pointer-events-none", locked);
+
+  const addWindowDetails = document.getElementById("add-window-details")!;
+  addWindowDetails.classList.toggle("opacity-40", locked);
+  addWindowDetails.classList.toggle("pointer-events-none", locked);
+
   const delaySection = document.querySelector<HTMLElement>(".border-t.border-slate-700\\/40");
-  delaySection?.classList.toggle("opacity-40 pointer-events-none", locked);
+  delaySection?.classList.toggle("opacity-40", locked);
+  delaySection?.classList.toggle("pointer-events-none", locked);
 }
 
 function renderWindows(s: GetStateResponse): void {
@@ -268,11 +275,7 @@ function renderWindows(s: GetStateResponse): void {
   }
 }
 
-function buildWindowRow(
-  w: BlockWindow,
-  index: number,
-  s: GetStateResponse,
-): HTMLLIElement {
+function buildWindowRow(w: BlockWindow, index: number, s: GetStateResponse): HTMLLIElement {
   const li = document.createElement("li");
   li.className = "flex flex-col gap-1 py-1.5 border-b border-slate-700/30 last:border-0";
 
@@ -295,7 +298,8 @@ function buildWindowRow(
   row.appendChild(label);
 
   const removeBtn = document.createElement("button");
-  removeBtn.className = "shrink-0 text-slate-500 hover:text-red-400 transition-colors ml-2 text-base leading-none";
+  removeBtn.className =
+    "shrink-0 text-slate-500 hover:text-red-400 transition-colors ml-2 text-base leading-none";
   removeBtn.textContent = "✕";
   removeBtn.title = "Remove window";
 
