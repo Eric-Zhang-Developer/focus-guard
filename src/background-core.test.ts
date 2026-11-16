@@ -13,6 +13,7 @@ import {
   getCurrentBlockWindow,
   getHostnameFromUrl,
   isInBlockWindow,
+  isLikelyDomain,
   isWeakeningSettingsChange,
   normalizeDomain,
   queuePendingRemoval,
@@ -29,6 +30,25 @@ describe("background-core", () => {
   it("normalizes domains defensively", () => {
     expect(normalizeDomain(" https://WWW.Reddit.com/r/typescript?q=1#top ")).toBe("reddit.com");
   });
+
+  it.each([
+    ["reddit.com:8080/r/all", "reddit.com"],
+    ["*.reddit.com", "reddit.com"],
+    ["user:pass@reddit.com", "reddit.com"],
+    ["reddit.com.", "reddit.com"],
+    ["münchen.de", "xn--mnchen-3ya.de"],
+    ["old.reddit.com", "old.reddit.com"],
+  ])("normalizes %s to a hostname Chrome accepts in a rule", (input, expected) => {
+    expect(normalizeDomain(input)).toBe(expected);
+    expect(isLikelyDomain(normalizeDomain(input))).toBe(true);
+  });
+
+  it.each(["", "reddit", "red dit.com", "reddit.com,", "reddit.*", "ftp://reddit.com", "[::1]"])(
+    "rejects %j as a domain",
+    (input) => {
+      expect(isLikelyDomain(normalizeDomain(input))).toBe(false);
+    },
+  );
 
   it("extracts normalized hostnames from supported tab URLs only", () => {
     expect(getHostnameFromUrl("https://m.youtube.com/watch?v=123")).toBe("m.youtube.com");

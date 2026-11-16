@@ -11,14 +11,23 @@ function toMinutes(hour: number, minute: number): number {
 }
 
 export function normalizeDomain(rawDomain: string): string {
-  const trimmedDomain = rawDomain.trim().toLowerCase();
-  const withoutProtocol = trimmedDomain.replace(/^https?:\/\//, "");
-  const withoutWww = withoutProtocol.replace(/^www\./, "");
-  const withoutHash = withoutWww.split("#")[0] ?? "";
-  const withoutQuery = withoutHash.split("?")[0] ?? "";
-  const domainOnly = withoutQuery.split("/")[0] ?? "";
+  // "*.reddit.com" asks for what "reddit.com" already does: the rule covers subdomains.
+  // Strip it before parsing, because Chrome's URL parser escapes "*" where Node's keeps it.
+  const withoutScheme = rawDomain
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^(\*\.)+/, "");
+  let hostname: string;
 
-  return domainOnly.replace(/^\.+|\.+$/g, "");
+  try {
+    // The URL parser lowercases, drops ports, paths and credentials, and punycodes
+    // non-ASCII hosts. Chrome rejects a rule whose urlFilter is not plain ASCII.
+    hostname = new URL(`https://${withoutScheme}`).hostname;
+  } catch {
+    return "";
+  }
+
+  return hostname.replace(/^www\./, "").replace(/^\.+|\.+$/g, "");
 }
 
 export function getHostnameFromUrl(url: string): string | null {
@@ -36,7 +45,9 @@ export function getHostnameFromUrl(url: string): string | null {
 }
 
 export function isLikelyDomain(domain: string): boolean {
-  return domain.includes(".") && !/\s/.test(domain);
+  // Strict on purpose: Chrome applies a rule update all-or-nothing, so one entry it
+  // rejects would stop every other site from being blocked.
+  return /^[a-z0-9_-]+(\.[a-z0-9_-]+)+$/.test(domain);
 }
 
 export function doesHostnameMatchBlockedDomain(hostname: string, blockedDomain: string): boolean {

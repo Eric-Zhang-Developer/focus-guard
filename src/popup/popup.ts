@@ -7,6 +7,7 @@ import type {
   RuntimeMessage,
   RuntimeResponse,
 } from "../types";
+import { isLikelyDomain, normalizeDomain } from "../background-core";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -38,21 +39,6 @@ function fmtDays(days: DayOfWeek[]): string {
 
 function fmtWindow(w: BlockWindow): string {
   return `${fmtDays(w.days as DayOfWeek[])}  ·  ${fmtTime(w.startHour, w.startMin)}–${fmtTime(w.endHour, w.endMin)}`;
-}
-
-function normalizeDomainInput(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .split("/")[0]!
-    .split("?")[0]!
-    .split("#")[0]!;
-}
-
-function isLikelyDomain(d: string): boolean {
-  return d.includes(".") && !/\s/.test(d);
 }
 
 async function sendMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
@@ -535,7 +521,7 @@ function initAddSite(): void {
 
   const submit = async (): Promise<void> => {
     errEl.classList.add("hidden");
-    const domain = normalizeDomainInput(input.value);
+    const domain = normalizeDomain(input.value);
 
     if (!isLikelyDomain(domain)) {
       errEl.textContent = "Enter a valid domain (e.g. reddit.com).";
