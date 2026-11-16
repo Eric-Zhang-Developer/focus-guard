@@ -66,7 +66,7 @@ Full popup with two tabs.
 **Sites tab**
 - Status banner when in a block window (label + end time)
 - Blocked sites list — instant ✕ outside block window; "Request removal" + intention textarea + countdown inside
-- Add site input with domain sanitization and validation (hidden during block window)
+- Add site input with domain sanitization and validation — always available (strengthening change)
 - Pending removal rows show live countdown + cancel
 
 **Schedule tab**

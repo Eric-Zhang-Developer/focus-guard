@@ -89,12 +89,8 @@ function switchTab(tab: "sites" | "schedule"): void {
 function renderSites(s: GetStateResponse): void {
   const list = document.getElementById("sites-list")!;
   const empty = document.getElementById("sites-empty")!;
-  const addRow = document.getElementById("add-site-row")!;
-  const note = document.getElementById("block-window-note")!;
 
   list.innerHTML = "";
-  addRow.classList.toggle("hidden", s.isBlocking);
-  note.classList.toggle("hidden", !s.isBlocking);
 
   const banner = document.getElementById("block-banner")!;
   if (s.isBlocking && s.activeWindow) {
