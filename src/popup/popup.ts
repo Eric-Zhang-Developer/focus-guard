@@ -579,8 +579,12 @@ function renderStatusDot(s: GetStateResponse): void {
 
 async function reload(): Promise<void> {
   clearTimers();
-  const resp = await sendMessage({ type: "GET_STATE" });
-  state = resp as GetStateResponse;
+  const resp = await sendMessage({ type: "GET_STATE" }).catch(() => null);
+  const failed = resp === null || "ok" in resp;
+  document.getElementById("load-error")!.classList.toggle("hidden", !failed);
+  if (failed) return;
+
+  state = resp;
   renderStatusDot(state);
   renderSites(state);
   renderSchedule(state);
