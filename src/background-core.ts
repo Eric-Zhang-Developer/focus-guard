@@ -1,5 +1,5 @@
 import { DEFAULT_BLOCK_WINDOWS, DEFAULT_FRICTION_DELAY_MS } from "./config";
-import type { BlockWindow, PendingRemoval, PendingSettingsChange, StorageSchema } from "./types";
+import type { BlockWindow, DayOfWeek, PendingRemoval, PendingSettingsChange, StorageSchema } from "./types";
 
 const REDIRECT_ACTION = "redirect" as chrome.declarativeNetRequest.RuleActionType;
 const MAIN_FRAME_RESOURCE =
@@ -85,14 +85,23 @@ export function getCurrentBlockWindow(
 
   return (
     windows.find((window) => {
-      if (!window.days.includes(day as BlockWindow["days"][number])) {
-        return false;
-      }
-
       const startMinutes = toMinutes(window.startHour, window.startMin);
       const endMinutes = toMinutes(window.endHour, window.endMin);
+      const startsToday = window.days.includes(day as DayOfWeek);
 
-      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+      if (startMinutes < endMinutes) {
+        return startsToday && currentMinutes >= startMinutes && currentMinutes < endMinutes;
+      }
+
+      // An end at or before the start runs past midnight; equal times are a full 24 hours.
+      // `days` names the day a window starts on, so its early-morning part is active when
+      // the day before is selected.
+      const startedYesterday = window.days.includes(((day + 6) % 7) as DayOfWeek);
+
+      return (
+        (startsToday && currentMinutes >= startMinutes) ||
+        (startedYesterday && currentMinutes < endMinutes)
+      );
     }) ?? null
   );
 }

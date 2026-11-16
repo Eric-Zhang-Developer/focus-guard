@@ -86,6 +86,43 @@ describe("background-core", () => {
     expect(getCurrentBlockWindow(new Date("2026-03-16T18:00:00"))).toBeNull();
   });
 
+  describe("windows that cross midnight", () => {
+    // 2026-03-20 is a Friday.
+    const fridayNight: BlockWindow[] = [
+      { label: "Late", days: [5], startHour: 22, startMin: 0, endHour: 2, endMin: 0 },
+    ];
+
+    it.each([
+      ["Friday 21:59", "2026-03-20T21:59:00", false],
+      ["Friday 22:00", "2026-03-20T22:00:00", true],
+      ["Friday 23:59", "2026-03-20T23:59:00", true],
+      ["Saturday 01:59", "2026-03-21T01:59:00", true],
+      ["Saturday 02:00", "2026-03-21T02:00:00", false],
+      ["Saturday 22:30, a day that is not selected", "2026-03-21T22:30:00", false],
+      ["Friday 01:00, because Thursday is not selected", "2026-03-20T01:00:00", false],
+    ])("a Friday 22:00-02:00 window at %s", (_label, at, expected) => {
+      expect(isInBlockWindow(new Date(at), fridayNight)).toBe(expected);
+    });
+
+    it("carries a Saturday-night window into Sunday", () => {
+      const saturdayNight: BlockWindow[] = [
+        { label: "Late", days: [6], startHour: 23, startMin: 0, endHour: 1, endMin: 0 },
+      ];
+
+      expect(isInBlockWindow(new Date("2026-03-22T00:30:00"), saturdayNight)).toBe(true);
+    });
+
+    it("treats equal start and end as a full 24 hours", () => {
+      const allMonday: BlockWindow[] = [
+        { label: "All day", days: [1], startHour: 0, startMin: 0, endHour: 0, endMin: 0 },
+      ];
+
+      expect(isInBlockWindow(new Date("2026-03-16T00:00:00"), allMonday)).toBe(true);
+      expect(isInBlockWindow(new Date("2026-03-16T23:59:00"), allMonday)).toBe(true);
+      expect(isInBlockWindow(new Date("2026-03-17T00:00:00"), allMonday)).toBe(false);
+    });
+  });
+
   it("builds redirect rules for valid normalized domains only", () => {
     const rules = buildDynamicRules([
       " Reddit.com ",

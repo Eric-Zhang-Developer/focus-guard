@@ -38,7 +38,9 @@ function fmtDays(days: DayOfWeek[]): string {
 }
 
 function fmtWindow(w: BlockWindow): string {
-  return `${fmtDays(w.days as DayOfWeek[])}  ·  ${fmtTime(w.startHour, w.startMin)}–${fmtTime(w.endHour, w.endMin)}`;
+  // An end at or before the start means the window runs into the next day.
+  const nextDay = w.endHour * 60 + w.endMin <= w.startHour * 60 + w.startMin ? " (next day)" : "";
+  return `${fmtDays(w.days as DayOfWeek[])}  ·  ${fmtTime(w.startHour, w.startMin)}–${fmtTime(w.endHour, w.endMin)}${nextDay}`;
 }
 
 async function sendMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
@@ -410,12 +412,6 @@ function initAddWindowForm(): void {
 
     const [startHour, startMin] = startVal.split(":").map(Number) as [number, number];
     const [endHour, endMin] = endVal.split(":").map(Number) as [number, number];
-
-    if (startHour * 60 + startMin >= endHour * 60 + endMin) {
-      errEl.textContent = "End time must be after start time.";
-      errEl.classList.remove("hidden");
-      return;
-    }
 
     const newWindow: BlockWindow = {
       label: label || `${fmtTime(startHour, startMin)}–${fmtTime(endHour, endMin)}`,
