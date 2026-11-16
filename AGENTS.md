@@ -254,7 +254,7 @@ and the apex domain. No extra work needed — just use that pattern.
   - Outside block window: ✕ removes instantly
   - Inside block window: "Request removal" → intention textarea → countdown on confirm
 - Pending removals show `Xm Ys [cancel]` countdown
-- Add site input (hidden during block window)
+- Add site input — always instant, even during block window (strengthening change)
 
 **Schedule tab**
 - List of block windows with ✕ remove buttons
