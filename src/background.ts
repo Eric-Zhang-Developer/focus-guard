@@ -340,6 +340,11 @@ async function handleAddSite(message: AddSiteMessage): Promise<RuntimeResponse> 
   if (nextStorage !== storage) {
     await writeStorage(nextStorage);
     await syncRules(nextStorage.blockedSites);
+    // The rule only catches new navigations. The site is already saved here, so a tab
+    // that cannot be redirected must not turn the add into an error.
+    await enforceOpenTabs(nextStorage).catch((error: unknown) => {
+      console.warn("Focus Guard open-tab enforcement skipped after add", error);
+    });
   }
 
   return { ok: true };
