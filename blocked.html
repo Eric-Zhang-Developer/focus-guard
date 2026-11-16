@@ -105,40 +105,6 @@
       <p class="message">You set this up for a reason.</p>
     </main>
 
-    <script type="module">
-      const params = new URLSearchParams(window.location.search);
-      const domain = params.get("domain");
-
-      if (domain) {
-        document.getElementById("domain").textContent = domain;
-      }
-
-      function pad(n) {
-        return String(n).padStart(2, "0");
-      }
-
-      function getCurrentBlockWindow(blockWindows) {
-        const now = new Date();
-        const day = now.getDay();
-        const totalMin = now.getHours() * 60 + now.getMinutes();
-        return blockWindows.find(w =>
-          w.days.includes(day) &&
-          totalMin >= w.startHour * 60 + w.startMin &&
-          totalMin < w.endHour * 60 + w.endMin
-        ) ?? null;
-      }
-
-      chrome.storage.sync.get(["blockWindows"], (items) => {
-        const blockWindows = Array.isArray(items.blockWindows) ? items.blockWindows : [];
-        const active = getCurrentBlockWindow(blockWindows);
-
-        if (active) {
-          document.getElementById("window-label").textContent = active.label;
-          document.getElementById("window-end").textContent =
-            `ends at ${pad(active.endHour)}:${pad(active.endMin)}`;
-          document.getElementById("window-info").classList.add("visible");
-        }
-      });
-    </script>
+    <script type="module" src="./src/blocked.ts"></script>
   </body>
 </html>
