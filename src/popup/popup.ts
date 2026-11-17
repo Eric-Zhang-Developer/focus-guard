@@ -7,7 +7,7 @@ import type {
   RuntimeMessage,
   RuntimeResponse,
 } from "../types";
-import { isLikelyDomain, normalizeDomain } from "../background-core";
+import { isLikelyDomain, isPassOpen, normalizeDomain } from "../background-core";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -103,46 +103,74 @@ function renderSites(s: GetStateResponse): void {
   }
 }
 
+// Ticks a countdown, then reloads once it runs out: asking the background for state is
+// what applies a due change, so the row moves on instead of sitting at 0m 00s.
+function startCountdown(el: HTMLElement, until: number): void {
+  const render = (): void => {
+    el.textContent = fmtCountdown(until - Date.now());
+  };
+  render();
+
+  const id = setInterval(() => {
+    render();
+    if (until <= Date.now()) void reload();
+  }, 1000) as unknown as number;
+  countdownTimers.push(id);
+}
+
+const FIELD_CLASS =
+  "bg-slate-800/60 border border-slate-700/60 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-orange-500/60 transition-colors";
+
 function buildSiteRow(
   domain: string,
   pending: PendingRemoval | null,
   isBlocking: boolean,
-  _frictionDelayMs: number,
+  frictionDelayMs: number,
 ): HTMLLIElement {
   const li = document.createElement("li");
   li.className = "flex flex-col gap-1 py-1.5 border-b border-slate-700/30 last:border-0";
 
   if (pending) {
-    // Show countdown
+    // Waiting (for a pass or a removal) or open on a pass.
+    const open = isPassOpen(pending);
     const row = document.createElement("div");
-    row.className = "flex items-center justify-between";
+    row.className = "flex items-center justify-between gap-2";
 
     const left = document.createElement("span");
-    left.className = "text-sm text-slate-400 italic truncate";
+    left.className = open
+      ? "text-sm text-emerald-300 truncate"
+      : "text-sm text-slate-400 italic truncate";
     left.textContent = domain;
     row.appendChild(left);
 
     const right = document.createElement("div");
     right.className = "flex items-center gap-2 shrink-0";
 
+    const status = document.createElement("span");
+    status.className = `text-xs font-mono ${open ? "text-emerald-400" : "text-amber-400"}`;
     const countdown = document.createElement("span");
-    countdown.className = "text-xs font-mono text-amber-400";
-    const update = (): void => {
-      countdown.textContent = fmtCountdown(pending.applyAt - Date.now());
-    };
-    update();
-    const id = setInterval(update, 1000) as unknown as number;
-    countdownTimers.push(id);
+
+    if (open) {
+      status.append("open for ", countdown);
+      startCountdown(countdown, pending.reblockAt!);
+    } else {
+      const kind =
+        pending.reblockAt === undefined
+          ? "removal"
+          : `${Math.round((pending.reblockAt - pending.applyAt) / 60000)} min pass`;
+      status.append(`${kind} in `, countdown);
+      startCountdown(countdown, pending.applyAt);
+    }
 
     const cancelBtn = document.createElement("button");
     cancelBtn.className = "text-xs text-slate-500 hover:text-red-400 transition-colors";
-    cancelBtn.textContent = "cancel";
+    cancelBtn.textContent = open ? "end now" : "cancel";
     cancelBtn.addEventListener("click", async () => {
       await sendMessage({ type: "CANCEL_REMOVE", domain });
       await reload();
     });
 
-    right.appendChild(countdown);
+    right.appendChild(status);
     right.appendChild(cancelBtn);
     row.appendChild(right);
     li.appendChild(row);
@@ -170,50 +198,90 @@ function buildSiteRow(
     });
     row.appendChild(removeBtn);
     li.appendChild(row);
-  } else {
-    // Locked: show "Request removal" button that opens intention form
-    const requestBtn = document.createElement("button");
-    requestBtn.className =
-      "shrink-0 text-xs text-amber-400 hover:text-amber-200 transition-colors ml-2";
-    requestBtn.textContent = "Request removal";
-
-    const form = document.createElement("div");
-    form.className = "hidden flex-col gap-1.5 mt-1";
-
-    const textarea = document.createElement("textarea");
-    textarea.rows = 2;
-    textarea.placeholder = "Why do you need this?";
-    textarea.className =
-      "w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-orange-500/60 transition-colors resize-none";
-
-    const confirmBtn = document.createElement("button");
-    confirmBtn.className =
-      "py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium hover:bg-amber-500/30 transition-colors";
-    confirmBtn.textContent = "Queue removal";
-
-    form.appendChild(textarea);
-    form.appendChild(confirmBtn);
-
-    requestBtn.addEventListener("click", () => {
-      form.classList.toggle("hidden");
-      form.classList.toggle("flex");
-    });
-
-    confirmBtn.addEventListener("click", async () => {
-      const reason = textarea.value.trim();
-      if (!reason) {
-        textarea.classList.add("border-red-500/60");
-        return;
-      }
-      await sendMessage({ type: "QUEUE_REMOVE", domain, reason });
-      await reload();
-    });
-
-    row.appendChild(requestBtn);
-    li.appendChild(row);
-    li.appendChild(form);
+    return li;
   }
 
+  // Locked: a reason and a wait, for a pass of the chosen length or, with no length, for good.
+  const requestBtn = document.createElement("button");
+  requestBtn.className =
+    "shrink-0 text-xs text-amber-400 hover:text-amber-200 transition-colors ml-2";
+  requestBtn.textContent = "Request removal";
+
+  const form = document.createElement("div");
+  form.className = "hidden flex-col gap-1.5 mt-1";
+
+  const textarea = document.createElement("textarea");
+  textarea.rows = 2;
+  textarea.placeholder = "What do you need it for?";
+  textarea.setAttribute("aria-label", `Reason for unblocking ${domain}`);
+  textarea.className = `w-full px-3 py-2 text-xs resize-none ${FIELD_CLASS}`;
+
+  const lengthRow = document.createElement("label");
+  lengthRow.className = "flex items-center gap-2 text-xs text-slate-400";
+  const minutesInput = document.createElement("input");
+  minutesInput.type = "number";
+  minutesInput.min = "1";
+  minutesInput.step = "any";
+  minutesInput.value = "15";
+  minutesInput.className = `w-16 px-2 py-1 text-xs ${FIELD_CLASS}`;
+  lengthRow.append("Unblock for", minutesInput, "min");
+
+  const hint = document.createElement("p");
+  hint.className = "text-xs text-slate-500";
+  hint.textContent = "Leave empty to remove it for good.";
+
+  const errEl = document.createElement("p");
+  errEl.className = "hidden text-xs text-red-400";
+
+  const confirmBtn = document.createElement("button");
+  confirmBtn.className =
+    "py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium hover:bg-amber-500/30 transition-colors";
+  confirmBtn.textContent = `Start ${Math.round(frictionDelayMs / 60000)} min wait`;
+
+  form.append(textarea, lengthRow, hint, errEl, confirmBtn);
+
+  requestBtn.addEventListener("click", () => {
+    form.classList.toggle("hidden");
+    form.classList.toggle("flex");
+  });
+
+  const showError = (message: string): void => {
+    errEl.textContent = message;
+    errEl.classList.remove("hidden");
+  };
+
+  form.addEventListener("input", () => {
+    errEl.classList.add("hidden");
+    textarea.classList.remove("border-red-500/60");
+  });
+
+  confirmBtn.addEventListener("click", async () => {
+    const reason = textarea.value.trim();
+    if (!reason) {
+      textarea.classList.add("border-red-500/60");
+      showError("Enter a reason first.");
+      return;
+    }
+
+    const rawMinutes = minutesInput.value.trim();
+    const minutes = rawMinutes === "" ? undefined : Number(rawMinutes);
+    // An empty box with invalid typed text also reads as "", so check the browser's verdict too.
+    if (!minutesInput.validity.valid || (minutes !== undefined && !(minutes > 0))) {
+      showError("Enter a number of minutes, or leave it empty.");
+      return;
+    }
+
+    const resp = await sendMessage({ type: "QUEUE_REMOVE", domain, reason, minutes });
+    if ("ok" in resp && !resp.ok) {
+      showError(resp.error);
+      return;
+    }
+    await reload();
+  });
+
+  row.appendChild(requestBtn);
+  li.appendChild(row);
+  li.appendChild(form);
   return li;
 }
 
@@ -356,13 +424,7 @@ function renderPendingSettings(pending: PendingSettingsChange | null): void {
   }
 
   banner.classList.remove("hidden");
-  const countdown = document.getElementById("pending-settings-countdown")!;
-  const update = (): void => {
-    countdown.textContent = fmtCountdown(pending.applyAt - Date.now());
-  };
-  update();
-  const id = setInterval(update, 1000) as unknown as number;
-  countdownTimers.push(id);
+  startCountdown(document.getElementById("pending-settings-countdown")!, pending.applyAt);
 }
 
 // ── add window form ────────────────────────────────────────────────────────────
