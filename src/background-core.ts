@@ -113,12 +113,41 @@ export function isInBlockWindow(
   return getCurrentBlockWindow(now, windows) !== null;
 }
 
+export function isPassOpen(removal: PendingRemoval, nowMs: number = Date.now()): boolean {
+  return removal.reblockAt !== undefined && removal.applyAt <= nowMs && nowMs < removal.reblockAt;
+}
+
+// The one answer to "what is blocked right now": nothing outside a window, and inside one,
+// the list minus any site with an open pass. Rules and tab checks both read this.
 export function getActiveBlockedSites(
-  blockedSites: string[],
-  windows: BlockWindow[] = DEFAULT_BLOCK_WINDOWS,
+  storage: Pick<StorageSchema, "blockedSites" | "blockWindows" | "pendingRemovals">,
   now: Date = new Date(),
 ): string[] {
-  return isInBlockWindow(now, windows) ? blockedSites : [];
+  if (!isInBlockWindow(now, storage.blockWindows)) {
+    return [];
+  }
+
+  const openDomains = new Set(
+    storage.pendingRemovals
+      .filter((removal) => isPassOpen(removal, now.getTime()))
+      .map((removal) => removal.domain),
+  );
+
+  return storage.blockedSites.filter((site) => !openDomains.has(site));
+}
+
+// When the next queued change is due, so the background can wake exactly then instead of
+// on its once-a-minute tick.
+export function getNextPendingChangeAt(
+  storage: Pick<StorageSchema, "pendingRemovals" | "pendingSettingsChange">,
+  nowMs: number = Date.now(),
+): number | null {
+  const upcoming = [
+    ...storage.pendingRemovals.flatMap((removal) => [removal.applyAt, removal.reblockAt]),
+    storage.pendingSettingsChange?.applyAt,
+  ].filter((time): time is number => time !== undefined && time > nowMs);
+
+  return upcoming.length > 0 ? Math.min(...upcoming) : null;
 }
 
 export function buildDynamicRules(domains: string[]): chrome.declarativeNetRequest.Rule[] {
@@ -195,6 +224,7 @@ export function queuePendingRemoval(
   reason: string,
   nowMs: number = Date.now(),
   delayMs: number = DEFAULT_FRICTION_DELAY_MS,
+  passMinutes?: number,
 ): { storage: StorageSchema; applyAt: number } {
   const normalizedDomain = normalizeDomain(domain);
   const existingPendingRemoval = storage.pendingRemovals.find(
@@ -215,6 +245,7 @@ export function queuePendingRemoval(
     reason: reason.trim(),
     scheduledAt,
     applyAt,
+    ...(passMinutes === undefined ? {} : { reblockAt: applyAt + passMinutes * 60_000 }),
   };
 
   return {
@@ -313,21 +344,27 @@ export function applyPendingRemovalsToState(
   storage: StorageSchema,
   nowMs: number = Date.now(),
 ): StorageSchema {
-  const expiredDomains = new Set(
-    storage.pendingRemovals
-      .filter((pendingRemoval) => pendingRemoval.applyAt <= nowMs)
-      .map((pendingRemoval) => pendingRemoval.domain),
+  // A pass stays queued while it is open, so its end can be seen; everything else leaves
+  // the queue once it is due.
+  const pendingRemovals = storage.pendingRemovals.filter(
+    (removal) =>
+      removal.applyAt > nowMs || (removal.reblockAt !== undefined && removal.reblockAt > nowMs),
   );
 
-  if (expiredDomains.size === 0) {
+  if (pendingRemovals.length === storage.pendingRemovals.length) {
     return storage;
   }
 
+  // Only a removal with no end takes the site off the list. An ended pass just leaves the queue.
+  const removedDomains = new Set(
+    storage.pendingRemovals
+      .filter((removal) => removal.applyAt <= nowMs && removal.reblockAt === undefined)
+      .map((removal) => removal.domain),
+  );
+
   return {
     ...storage,
-    blockedSites: storage.blockedSites.filter((blockedSite) => !expiredDomains.has(blockedSite)),
-    pendingRemovals: storage.pendingRemovals.filter(
-      (pendingRemoval) => pendingRemoval.applyAt > nowMs,
-    ),
+    blockedSites: storage.blockedSites.filter((blockedSite) => !removedDomains.has(blockedSite)),
+    pendingRemovals,
   };
 }

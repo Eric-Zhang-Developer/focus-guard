@@ -12,8 +12,10 @@ import {
   getBlockedDomainForUrl,
   getCurrentBlockWindow,
   getHostnameFromUrl,
+  getNextPendingChangeAt,
   isInBlockWindow,
   isLikelyDomain,
+  isPassOpen,
   isWeakeningSettingsChange,
   normalizeDomain,
   queuePendingRemoval,
@@ -150,12 +152,60 @@ describe("background-core", () => {
   });
 
   it("only exposes active blocked sites during a block window", () => {
-    const sites = ["reddit.com", "youtube.com"];
+    const storage = testStorage({ blockedSites: ["reddit.com", "youtube.com"] });
 
-    expect(getActiveBlockedSites(sites, undefined, new Date("2026-03-16T09:30:00"))).toEqual(
-      sites,
-    );
-    expect(getActiveBlockedSites(sites, undefined, new Date("2026-03-16T18:00:00"))).toEqual([]);
+    expect(getActiveBlockedSites(storage, new Date("2026-03-16T09:30:00"))).toEqual([
+      "reddit.com",
+      "youtube.com",
+    ]);
+    expect(getActiveBlockedSites(storage, new Date("2026-03-16T18:00:00"))).toEqual([]);
+  });
+
+  describe("a pass", () => {
+    // Monday 09:30, inside the default morning window.
+    const requestedAt = new Date("2026-03-16T09:30:00").getTime();
+    const minute = 60_000;
+    const blocked = testStorage({ blockedSites: ["reddit.com", "youtube.com"] });
+    const withPass = queuePendingRemoval(blocked, "reddit.com", "one thread", requestedAt, 10 * minute, 15)
+      .storage;
+    const at = (minutes: number) => requestedAt + minutes * minute;
+    const settle = (minutes: number) => applyPendingRemovalsToState(withPass, at(minutes));
+    const activeAt = (minutes: number) => getActiveBlockedSites(settle(minutes), new Date(at(minutes)));
+
+    it("ends its wait at the delay and re-blocks after its length", () => {
+      expect(withPass.pendingRemovals[0]).toMatchObject({ applyAt: at(10), reblockAt: at(25) });
+    });
+
+    it.each([
+      ["during the wait", 9, ["reddit.com", "youtube.com"]],
+      ["the moment it opens", 10, ["youtube.com"]],
+      ["just before it ends", 24.9, ["youtube.com"]],
+      ["the moment it ends", 25, ["reddit.com", "youtube.com"]],
+    ])("%s", (_label, minutes, expected) => {
+      expect(activeAt(minutes)).toEqual(expected);
+    });
+
+    it("keeps the site on the list throughout, and leaves the queue only when it ends", () => {
+      expect(settle(12)).toBe(withPass);
+      expect(isPassOpen(withPass.pendingRemovals[0]!, at(12))).toBe(true);
+      expect(settle(25).blockedSites).toEqual(["reddit.com", "youtube.com"]);
+      expect(settle(25).pendingRemovals).toEqual([]);
+    });
+
+    it("leaves a removal with no length permanent", () => {
+      const permanent = queuePendingRemoval(blocked, "reddit.com", "done with it", requestedAt, 10 * minute)
+        .storage;
+
+      expect(permanent.pendingRemovals[0]).not.toHaveProperty("reblockAt");
+      expect(applyPendingRemovalsToState(permanent, at(10)).blockedSites).toEqual(["youtube.com"]);
+    });
+
+    it("reports the next moment anything is due", () => {
+      expect(getNextPendingChangeAt(withPass, at(0))).toBe(at(10));
+      expect(getNextPendingChangeAt(withPass, at(10))).toBe(at(25));
+      expect(getNextPendingChangeAt(withPass, at(25))).toBeNull();
+      expect(getNextPendingChangeAt(blocked, at(0))).toBeNull();
+    });
   });
 
   it("adds blocked domains idempotently and clears pending removals for the same domain", () => {

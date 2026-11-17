@@ -16,6 +16,9 @@ export interface PendingRemoval {
   reason: string;
   scheduledAt: number;
   applyAt: number;
+  // Set for a pass: the site opens at applyAt and is blocked again at reblockAt.
+  // Absent for a permanent removal, which takes the site off the list at applyAt.
+  reblockAt?: number;
 }
 
 export interface PendingSettingsChange {
@@ -55,6 +58,8 @@ export interface QueueRemoveMessage {
   type: "QUEUE_REMOVE";
   domain: string;
   reason: string;
+  // Pass length. Omit to remove the site for good.
+  minutes?: number;
 }
 
 export interface CancelRemoveMessage {
