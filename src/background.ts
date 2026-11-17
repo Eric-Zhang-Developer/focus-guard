@@ -189,7 +189,22 @@ async function ensureAlarm(): Promise<void> {
   });
 }
 
-async function syncRules(blockedSites?: string[]): Promise<void> {
+let ruleSync: Promise<void> = Promise.resolve();
+
+// One update at a time: two overlapping updates both read "no rules installed", both add
+// rule id 1, and Chrome rejects the second. Never rejects: a failed update is retried on
+// the next alarm tick and must not fail the popup request that happened to trigger it.
+function syncRules(blockedSites?: string[]): Promise<void> {
+  ruleSync = ruleSync
+    .then(() => applyRules(blockedSites))
+    .catch((error: unknown) => {
+      console.error("Focus Guard rule sync failed", error);
+    });
+
+  return ruleSync;
+}
+
+async function applyRules(blockedSites?: string[]): Promise<void> {
   const storage = await readStorage();
   const domains = getActiveBlockedSites(
     blockedSites ?? storage.blockedSites,

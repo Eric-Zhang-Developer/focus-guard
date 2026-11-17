@@ -13,6 +13,7 @@ import {
   getCurrentBlockWindow,
   getHostnameFromUrl,
   isInBlockWindow,
+  isLikelyDomain,
   isWeakeningSettingsChange,
   normalizeDomain,
   queuePendingRemoval,
@@ -29,6 +30,25 @@ describe("background-core", () => {
   it("normalizes domains defensively", () => {
     expect(normalizeDomain(" https://WWW.Reddit.com/r/typescript?q=1#top ")).toBe("reddit.com");
   });
+
+  it.each([
+    ["reddit.com:8080/r/all", "reddit.com"],
+    ["*.reddit.com", "reddit.com"],
+    ["user:pass@reddit.com", "reddit.com"],
+    ["reddit.com.", "reddit.com"],
+    ["münchen.de", "xn--mnchen-3ya.de"],
+    ["old.reddit.com", "old.reddit.com"],
+  ])("normalizes %s to a hostname Chrome accepts in a rule", (input, expected) => {
+    expect(normalizeDomain(input)).toBe(expected);
+    expect(isLikelyDomain(normalizeDomain(input))).toBe(true);
+  });
+
+  it.each(["", "reddit", "red dit.com", "reddit.com,", "reddit.*", "ftp://reddit.com", "[::1]"])(
+    "rejects %j as a domain",
+    (input) => {
+      expect(isLikelyDomain(normalizeDomain(input))).toBe(false);
+    },
+  );
 
   it("extracts normalized hostnames from supported tab URLs only", () => {
     expect(getHostnameFromUrl("https://m.youtube.com/watch?v=123")).toBe("m.youtube.com");
@@ -64,6 +84,43 @@ describe("background-core", () => {
       "Afternoon Focus",
     );
     expect(getCurrentBlockWindow(new Date("2026-03-16T18:00:00"))).toBeNull();
+  });
+
+  describe("windows that cross midnight", () => {
+    // 2026-03-20 is a Friday.
+    const fridayNight: BlockWindow[] = [
+      { label: "Late", days: [5], startHour: 22, startMin: 0, endHour: 2, endMin: 0 },
+    ];
+
+    it.each([
+      ["Friday 21:59", "2026-03-20T21:59:00", false],
+      ["Friday 22:00", "2026-03-20T22:00:00", true],
+      ["Friday 23:59", "2026-03-20T23:59:00", true],
+      ["Saturday 01:59", "2026-03-21T01:59:00", true],
+      ["Saturday 02:00", "2026-03-21T02:00:00", false],
+      ["Saturday 22:30, a day that is not selected", "2026-03-21T22:30:00", false],
+      ["Friday 01:00, because Thursday is not selected", "2026-03-20T01:00:00", false],
+    ])("a Friday 22:00-02:00 window at %s", (_label, at, expected) => {
+      expect(isInBlockWindow(new Date(at), fridayNight)).toBe(expected);
+    });
+
+    it("carries a Saturday-night window into Sunday", () => {
+      const saturdayNight: BlockWindow[] = [
+        { label: "Late", days: [6], startHour: 23, startMin: 0, endHour: 1, endMin: 0 },
+      ];
+
+      expect(isInBlockWindow(new Date("2026-03-22T00:30:00"), saturdayNight)).toBe(true);
+    });
+
+    it("treats equal start and end as a full 24 hours", () => {
+      const allMonday: BlockWindow[] = [
+        { label: "All day", days: [1], startHour: 0, startMin: 0, endHour: 0, endMin: 0 },
+      ];
+
+      expect(isInBlockWindow(new Date("2026-03-16T00:00:00"), allMonday)).toBe(true);
+      expect(isInBlockWindow(new Date("2026-03-16T23:59:00"), allMonday)).toBe(true);
+      expect(isInBlockWindow(new Date("2026-03-17T00:00:00"), allMonday)).toBe(false);
+    });
   });
 
   it("builds redirect rules for valid normalized domains only", () => {

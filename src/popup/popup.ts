@@ -7,6 +7,7 @@ import type {
   RuntimeMessage,
   RuntimeResponse,
 } from "../types";
+import { isLikelyDomain, normalizeDomain } from "../background-core";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,22 +38,9 @@ function fmtDays(days: DayOfWeek[]): string {
 }
 
 function fmtWindow(w: BlockWindow): string {
-  return `${fmtDays(w.days as DayOfWeek[])}  ·  ${fmtTime(w.startHour, w.startMin)}–${fmtTime(w.endHour, w.endMin)}`;
-}
-
-function normalizeDomainInput(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .split("/")[0]!
-    .split("?")[0]!
-    .split("#")[0]!;
-}
-
-function isLikelyDomain(d: string): boolean {
-  return d.includes(".") && !/\s/.test(d);
+  // An end at or before the start means the window runs into the next day.
+  const nextDay = w.endHour * 60 + w.endMin <= w.startHour * 60 + w.startMin ? " (next day)" : "";
+  return `${fmtDays(w.days as DayOfWeek[])}  ·  ${fmtTime(w.startHour, w.startMin)}–${fmtTime(w.endHour, w.endMin)}${nextDay}`;
 }
 
 async function sendMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
@@ -425,12 +413,6 @@ function initAddWindowForm(): void {
     const [startHour, startMin] = startVal.split(":").map(Number) as [number, number];
     const [endHour, endMin] = endVal.split(":").map(Number) as [number, number];
 
-    if (startHour * 60 + startMin >= endHour * 60 + endMin) {
-      errEl.textContent = "End time must be after start time.";
-      errEl.classList.remove("hidden");
-      return;
-    }
-
     const newWindow: BlockWindow = {
       label: label || `${fmtTime(startHour, startMin)}–${fmtTime(endHour, endMin)}`,
       days: selectedDays,
@@ -535,7 +517,7 @@ function initAddSite(): void {
 
   const submit = async (): Promise<void> => {
     errEl.classList.add("hidden");
-    const domain = normalizeDomainInput(input.value);
+    const domain = normalizeDomain(input.value);
 
     if (!isLikelyDomain(domain)) {
       errEl.textContent = "Enter a valid domain (e.g. reddit.com).";
@@ -593,8 +575,12 @@ function renderStatusDot(s: GetStateResponse): void {
 
 async function reload(): Promise<void> {
   clearTimers();
-  const resp = await sendMessage({ type: "GET_STATE" });
-  state = resp as GetStateResponse;
+  const resp = await sendMessage({ type: "GET_STATE" }).catch(() => null);
+  const failed = resp === null || "ok" in resp;
+  document.getElementById("load-error")!.classList.toggle("hidden", !failed);
+  if (failed) return;
+
+  state = resp;
   renderStatusDot(state);
   renderSites(state);
   renderSchedule(state);
