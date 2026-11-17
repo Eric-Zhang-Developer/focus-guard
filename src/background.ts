@@ -8,6 +8,7 @@ import {
   cancelSettingsChange,
   getBlockedDomainForUrl,
   getCurrentBlockWindow,
+  getNextPendingChangeAt,
   isInBlockWindow,
   isLikelyDomain,
   isWeakeningSettingsChange,
@@ -34,6 +35,7 @@ import type {
 } from "./types";
 
 const APPLY_PENDING_ALARM = "focus-guard-apply-pending";
+const NEXT_CHANGE_ALARM = "focus-guard-next-change";
 const BLOCKED_PAGE_PATH = "/blocked.html";
 const LAST_KNOWN_BLOCKING_STATE_KEY = "lastKnownBlockingState";
 
@@ -92,6 +94,9 @@ function normalizeStorage(rawStorage: Partial<StorageSchema>): StorageSchema {
           reason: entry.reason.trim(),
           scheduledAt: entry.scheduledAt,
           applyAt: entry.applyAt,
+          ...(typeof entry.reblockAt === "number" && entry.reblockAt > entry.applyAt
+            ? { reblockAt: entry.reblockAt }
+            : {}),
         });
 
         return pending;
@@ -194,28 +199,46 @@ let ruleSync: Promise<void> = Promise.resolve();
 // One update at a time: two overlapping updates both read "no rules installed", both add
 // rule id 1, and Chrome rejects the second. Never rejects: a failed update is retried on
 // the next alarm tick and must not fail the popup request that happened to trigger it.
-function syncRules(blockedSites?: string[]): Promise<void> {
-  ruleSync = ruleSync
-    .then(() => applyRules(blockedSites))
-    .catch((error: unknown) => {
-      console.error("Focus Guard rule sync failed", error);
-    });
+function syncRules(): Promise<void> {
+  ruleSync = ruleSync.then(applyRules).catch((error: unknown) => {
+    console.error("Focus Guard rule sync failed", error);
+  });
 
   return ruleSync;
 }
 
-async function applyRules(blockedSites?: string[]): Promise<void> {
-  const storage = await readStorage();
-  const domains = getActiveBlockedSites(
-    blockedSites ?? storage.blockedSites,
-    storage.blockWindows,
-    new Date(),
-  );
+// Reads storage when it runs, not when it was queued, so the last sync always wins.
+async function applyRules(): Promise<void> {
+  const domains = getActiveBlockedSites(await readStorage());
   const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
 
   await chrome.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: existingRules.map((rule) => rule.id),
     addRules: buildDynamicRules(domains),
+  });
+}
+
+// One-shot wake-up for the next queued change, so a pass starts and ends on time and not
+// on the next once-a-minute tick.
+async function scheduleNextChange(storage: StorageSchema): Promise<void> {
+  const when = getNextPendingChangeAt(storage);
+
+  if (when === null) {
+    await chrome.alarms.clear(NEXT_CHANGE_ALARM);
+    return;
+  }
+
+  await chrome.alarms.create(NEXT_CHANGE_ALARM, { when });
+}
+
+// Everything that has to follow a change to what is blocked.
+async function applyBlockingChange(storage: StorageSchema): Promise<void> {
+  await syncRules();
+  await scheduleNextChange(storage);
+  // Rules only catch new navigations. Storage is already written, so a tab that cannot be
+  // redirected must not turn the request into an error.
+  await enforceOpenTabs(storage).catch((error: unknown) => {
+    console.warn("Focus Guard open-tab enforcement skipped", error);
   });
 }
 
@@ -242,11 +265,7 @@ async function enforceTabIfNeeded(
 
   const currentStorage = storage ?? (await reconcilePending());
 
-  if (!isInBlockWindow(new Date(), currentStorage.blockWindows)) {
-    return false;
-  }
-
-  const matchedDomain = getBlockedDomainForUrl(tabUrl, currentStorage.blockedSites);
+  const matchedDomain = getBlockedDomainForUrl(tabUrl, getActiveBlockedSites(currentStorage));
 
   if (matchedDomain === null) {
     return false;
@@ -293,18 +312,20 @@ async function syncBlockingState(storage?: StorageSchema): Promise<StorageSchema
 
 async function reconcilePending(): Promise<StorageSchema> {
   const storage = await readStorage();
-  const afterRemovals = applyPendingRemovalsToState(storage);
-  const afterSettings = applyPendingSettingsToState(afterRemovals);
+  const next = applyPendingSettingsToState(applyPendingRemovalsToState(storage));
 
-  if (afterSettings === storage) {
-    await syncRules(storage.blockedSites);
+  if (next === storage) {
+    // Still synced: a pass opening changes what is blocked without changing storage.
+    await syncRules();
+    await scheduleNextChange(storage);
     return storage;
   }
 
-  await writeStorage(afterSettings);
-  await syncRules(afterSettings.blockedSites);
+  await writeStorage(next);
+  // A pass that just ended can leave a tab sitting on a site that is blocked again.
+  await applyBlockingChange(next);
 
-  return afterSettings;
+  return next;
 }
 
 async function bootstrapBackground(): Promise<void> {
@@ -354,12 +375,7 @@ async function handleAddSite(message: AddSiteMessage): Promise<RuntimeResponse> 
 
   if (nextStorage !== storage) {
     await writeStorage(nextStorage);
-    await syncRules(nextStorage.blockedSites);
-    // The rule only catches new navigations. The site is already saved here, so a tab
-    // that cannot be redirected must not turn the add into an error.
-    await enforceOpenTabs(nextStorage).catch((error: unknown) => {
-      console.warn("Focus Guard open-tab enforcement skipped after add", error);
-    });
+    await applyBlockingChange(nextStorage);
   }
 
   return { ok: true };
@@ -382,7 +398,7 @@ async function handleQueueRemove(message: QueueRemoveMessage): Promise<RuntimeRe
 
     if (nextStorage !== storage) {
       await writeStorage(nextStorage);
-      await syncRules(nextStorage.blockedSites);
+      await syncRules();
     }
 
     return { ok: true, appliedImmediately: true, applyAt: null };
@@ -394,10 +410,24 @@ async function handleQueueRemove(message: QueueRemoveMessage): Promise<RuntimeRe
     return errorResponse("A reason is required during an active block window.");
   }
 
-  const queued = queuePendingRemoval(storage, domain, reason, Date.now(), storage.frictionDelayMs);
+  const { minutes } = message;
+
+  if (minutes !== undefined && !(Number.isFinite(minutes) && minutes > 0)) {
+    return errorResponse("Enter a number of minutes, or leave it empty to remove the site.");
+  }
+
+  const queued = queuePendingRemoval(
+    storage,
+    domain,
+    reason,
+    Date.now(),
+    storage.frictionDelayMs,
+    minutes,
+  );
 
   if (queued.storage !== storage) {
     await writeStorage(queued.storage);
+    await scheduleNextChange(queued.storage);
   }
 
   return { ok: true, appliedImmediately: false, applyAt: queued.applyAt };
@@ -415,6 +445,8 @@ async function handleCancelRemove(message: CancelRemoveMessage): Promise<Runtime
 
   if (nextStorage !== storage) {
     await writeStorage(nextStorage);
+    // Cancelling an open pass ends it, so the site has to be blocked again right away.
+    await applyBlockingChange(nextStorage);
   }
 
   return { ok: true };
@@ -451,6 +483,7 @@ async function handleUpdateSettings(
       reason,
     );
     await writeStorage(queued.storage);
+    await scheduleNextChange(queued.storage);
     return { ok: true, appliedImmediately: false, applyAt: queued.applyAt };
   }
 
@@ -461,7 +494,7 @@ async function handleUpdateSettings(
   };
 
   await writeStorage(nextStorage);
-  await syncRules(nextStorage.blockedSites);
+  await syncRules();
   return { ok: true, appliedImmediately: true, applyAt: null };
 }
 
@@ -513,7 +546,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== APPLY_PENDING_ALARM) {
+  if (alarm.name !== APPLY_PENDING_ALARM && alarm.name !== NEXT_CHANGE_ALARM) {
     return;
   }
 

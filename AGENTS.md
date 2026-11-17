@@ -137,6 +137,7 @@ export interface PendingRemoval {
   reason: string;
   scheduledAt: number;
   applyAt: number;
+  reblockAt?: number; // set for a pass: open from applyAt, blocked again at reblockAt
 }
 
 export interface PendingSettingsChange {
@@ -237,8 +238,8 @@ and the apex domain. No extra work needed — just use that pattern.
 | ----------------- | ---------------------------------------------------- | -------------------------------------------------------------------------- |
 | `GET_STATE`       | —                                                    | `{ sites, pendingRemovals, blockWindows, frictionDelayMs, pendingSettingsChange, isBlocking, activeWindow }` |
 | `ADD_SITE`        | `{ domain }`                                         | `{ ok }`                                                                   |
-| `QUEUE_REMOVE`    | `{ domain, reason }`                                 | `{ ok, appliedImmediately, applyAt }` — instant if outside window          |
-| `CANCEL_REMOVE`   | `{ domain }`                                         | `{ ok }`                                                                   |
+| `QUEUE_REMOVE`    | `{ domain, reason, minutes? }`                       | `{ ok, appliedImmediately, applyAt }` — instant if outside window; `minutes` makes it a pass |
+| `CANCEL_REMOVE`   | `{ domain }`                                         | `{ ok }` — cancels a wait, or ends an open pass                             |
 | `UPDATE_SETTINGS` | `{ blockWindows, frictionDelayMs, reason? }`         | `{ ok, appliedImmediately, applyAt }` — queued if weakening + in window    |
 | `CANCEL_SETTINGS` | —                                                    | `{ ok }`                                                                   |
 
@@ -252,8 +253,10 @@ and the apex domain. No extra work needed — just use that pattern.
 - Status banner when in a block window
 - List of blocked sites
   - Outside block window: ✕ removes instantly
-  - Inside block window: "Request removal" → intention textarea → countdown on confirm
-- Pending removals show `Xm Ys [cancel]` countdown
+  - Inside block window: "Request removal" → intention textarea + "Unblock for N min" → countdown on confirm
+    - With a length it is a pass: the site stays on the list, opens after the wait, and is blocked again when the length runs out
+    - With the length left empty it is a permanent removal
+- Waiting rows show `15 min pass in Xm Ys [cancel]` or `removal in Xm Ys [cancel]`; an open pass shows `open for Xm Ys [end now]`
 - Add site input — always instant, even during block window (strengthening change)
 
 **Schedule tab**

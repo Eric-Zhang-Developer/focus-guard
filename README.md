@@ -21,7 +21,7 @@ Focus Guard is a personal Chrome extension that blocks distracting websites on a
 1. **Add sites to block** via the popup (Sites tab)
 2. **Configure block windows** — set which days and time ranges should be enforced (Schedule tab)
 3. **Blocked sites redirect** to the blocked page during active windows
-4. **Removing a site or weakening settings during a block window** requires a typed reason and a countdown delay before the change takes effect
+4. **Unblocking a site or weakening settings during a block window** requires a typed reason and a countdown delay before the change takes effect. A site can be unblocked for a set number of minutes (a pass) and is blocked again afterwards, or removed for good
 5. **Pending changes apply automatically** via a background alarm; the popup shows live countdowns
 
 ---
@@ -30,6 +30,7 @@ Focus Guard is a personal Chrome extension that blocks distracting websites on a
 
 - Scheduled block windows (configurable days and time ranges)
 - Friction-based site removal — reason prompt + countdown, not just a click
+- Timed passes — unblock a site for a chosen number of minutes; it re-blocks itself
 - Protected settings — weakening during a block window requires friction
 - Pending change queue with live countdown timers in the popup
 - Blocked page shows which site was intercepted
