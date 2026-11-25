@@ -1,0 +1,11 @@
+<!-- Toolbar size, drawn on the pixel grid: icon.svg scaled to 16px gives 1.25px strokes that blur. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect width="16" height="16" rx="3.5" fill="#0f172a"/>
+  <g fill="none" stroke="#fb923c" stroke-width="2" stroke-linejoin="round">
+    <path d="M4 7V4h3"/>
+    <path d="M9 4h3v3"/>
+    <path d="M12 9v3H9"/>
+    <path d="M7 12H4V9"/>
+  </g>
+  <rect x="7" y="7" width="2" height="2" fill="#fb923c"/>
+</svg>
