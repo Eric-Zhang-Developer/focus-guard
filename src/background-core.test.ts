@@ -7,19 +7,27 @@ import {
   applyPendingRemovalsToState,
   applyPendingSettingsToState,
   buildDynamicRules,
+  cancelFocusSessionEnd,
   cancelSettingsChange,
+  clearEndedFocusSession,
   doesHostnameMatchBlockedDomain,
   getBlockedDomainForUrl,
   getCurrentBlockWindow,
   getHostnameFromUrl,
   getNextPendingChangeAt,
+  isFocusSessionActive,
   isInBlockWindow,
   isLikelyDomain,
   isPassOpen,
+  isSiteEnforced,
   isWeakeningSettingsChange,
   normalizeDomain,
   queuePendingRemoval,
   queueSettingsChange,
+  removeDomainFromState,
+  requestFocusSessionEnd,
+  setFocusOnly,
+  startFocusSession,
 } from "./background-core";
 import { DEFAULT_STORAGE } from "./types";
 import type { BlockWindow, StorageSchema } from "./types";
@@ -205,6 +213,104 @@ describe("background-core", () => {
       expect(getNextPendingChangeAt(withPass, at(10))).toBe(at(25));
       expect(getNextPendingChangeAt(withPass, at(25))).toBeNull();
       expect(getNextPendingChangeAt(blocked, at(0))).toBeNull();
+    });
+  });
+
+  describe("a focus session", () => {
+    const minute = 60_000;
+    // Monday: 09:30 is inside the default morning window, 18:00 is outside every window.
+    const inWindow = new Date("2026-03-16T09:30:00");
+    const outside = new Date("2026-03-16T18:00:00");
+    const t = outside.getTime();
+    const sites = testStorage({
+      blockedSites: ["x.com", "mail.google.com"],
+      focusOnlySites: ["mail.google.com"],
+      frictionDelayMs: 10 * minute,
+    });
+    const started = startFocusSession(sites, 45, t);
+
+    it("blocks focus-only sites too, in or out of a window", () => {
+      expect(getActiveBlockedSites(started, outside)).toEqual(["x.com", "mail.google.com"]);
+      expect(
+        getActiveBlockedSites(startFocusSession(sites, 45, inWindow.getTime()), inWindow),
+      ).toEqual(["x.com", "mail.google.com"]);
+    });
+
+    it("leaves focus-only sites open in a plain window, and blocks nothing outside both", () => {
+      expect(getActiveBlockedSites(sites, inWindow)).toEqual(["x.com"]);
+      expect(getActiveBlockedSites(sites, outside)).toEqual([]);
+    });
+
+    it("still respects an open pass", () => {
+      const withPass = queuePendingRemoval(started, "x.com", "one post", t, 10 * minute, 15).storage;
+
+      expect(getActiveBlockedSites(withPass, new Date(t + 12 * minute))).toEqual(["mail.google.com"]);
+    });
+
+    it("starts now and extends from its end", () => {
+      expect(started.focusSession).toEqual({ endsAt: t + 45 * minute });
+      expect(startFocusSession(started, 15, t + 5 * minute).focusSession).toEqual({
+        endsAt: t + 60 * minute,
+      });
+    });
+
+    it("pulls its end in for an early end, and cancelling puts it back", () => {
+      const ending = requestFocusSessionEnd(started, " done ", t + 5 * minute);
+
+      expect(ending.focusSession).toEqual({
+        endsAt: t + 15 * minute,
+        endingEarly: { reason: "done", originalEndsAt: t + 45 * minute },
+      });
+      expect(requestFocusSessionEnd(ending, "again", t + 6 * minute)).toBe(ending);
+      expect(cancelFocusSessionEnd(ending).focusSession).toEqual({ endsAt: t + 45 * minute });
+      expect(cancelFocusSessionEnd(started)).toBe(started);
+    });
+
+    it("refuses an early end the wait would not make sooner", () => {
+      expect(requestFocusSessionEnd(started, "done", t + 40 * minute)).toBe(started);
+      expect(requestFocusSessionEnd(sites, "done", t)).toBe(sites);
+    });
+
+    it("drops a pending early end when extended", () => {
+      const ending = requestFocusSessionEnd(started, "done", t + 5 * minute);
+
+      expect(startFocusSession(ending, 15, t + 6 * minute).focusSession).toEqual({
+        endsAt: t + 60 * minute,
+      });
+    });
+
+    it("is cleared once it ends", () => {
+      expect(isFocusSessionActive(started, t + 45 * minute)).toBe(false);
+      expect(clearEndedFocusSession(started, t + 44 * minute)).toBe(started);
+      expect(clearEndedFocusSession(started, t + 45 * minute).focusSession).toBeNull();
+      expect(clearEndedFocusSession(sites, t)).toBe(sites);
+    });
+
+    it("wakes the background when it ends", () => {
+      expect(getNextPendingChangeAt(started, t)).toBe(t + 45 * minute);
+    });
+
+    it("flags only listed sites as focus only", () => {
+      expect(setFocusOnly(sites, "x.com", true).focusOnlySites).toEqual(["mail.google.com", "x.com"]);
+      expect(setFocusOnly(sites, "mail.google.com", false).focusOnlySites).toEqual([]);
+      expect(setFocusOnly(sites, "mail.google.com", true)).toBe(sites);
+      expect(setFocusOnly(sites, "reddit.com", true)).toBe(sites);
+    });
+
+    it("drops the flag when the site is removed", () => {
+      const queued = queuePendingRemoval(sites, "mail.google.com", "done", t, 10 * minute).storage;
+
+      expect(removeDomainFromState(sites, "mail.google.com").focusOnlySites).toEqual([]);
+      expect(applyPendingRemovalsToState(queued, t + 10 * minute).focusOnlySites).toEqual([]);
+    });
+
+    it.each([
+      ["in a session", started, outside, true, true],
+      ["in a plain window", sites, inWindow, true, false],
+      ["outside both", sites, outside, false, false],
+    ])("enforces sites %s", (_label, storage, now, always, focusOnly) => {
+      expect(isSiteEnforced(storage, "x.com", now)).toBe(always);
+      expect(isSiteEnforced(storage, "mail.google.com", now)).toBe(focusOnly);
     });
   });
 

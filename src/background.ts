@@ -4,18 +4,25 @@ import {
   applyPendingRemovalsToState,
   applyPendingSettingsToState,
   buildDynamicRules,
+  cancelFocusSessionEnd,
   cancelPendingRemoval,
   cancelSettingsChange,
+  clearEndedFocusSession,
   getBlockedDomainForUrl,
   getCurrentBlockWindow,
   getNextPendingChangeAt,
-  isInBlockWindow,
+  isBlockingNow,
+  isFocusSessionActive,
   isLikelyDomain,
+  isSiteEnforced,
   isWeakeningSettingsChange,
   normalizeDomain,
   queuePendingRemoval,
   queueSettingsChange,
   removeDomainFromState,
+  requestFocusSessionEnd,
+  setFocusOnly,
+  startFocusSession,
 } from "./background-core";
 import { DEFAULT_BLOCK_WINDOWS, DEFAULT_FRICTION_DELAY_MS } from "./config";
 import { DEFAULT_STORAGE } from "./types";
@@ -24,11 +31,15 @@ import type {
   BlockWindow,
   CancelRemoveMessage,
   CancelSettingsMessage,
+  EndFocusMessage,
   ErrorResponse,
+  FocusSession,
   GetStateResponse,
   QueueRemoveMessage,
   RuntimeMessage,
   RuntimeResponse,
+  SetFocusOnlyMessage,
+  StartFocusMessage,
   StorageSchema,
   UpdateSettingsMessage,
   UpdateSettingsResponse,
@@ -54,6 +65,20 @@ function isValidBlockWindow(value: unknown): value is BlockWindow {
     typeof w.startMin === "number" &&
     typeof w.endHour === "number" &&
     typeof w.endMin === "number"
+  );
+}
+
+function isValidFocusSession(value: unknown): value is FocusSession {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Record<string, unknown>;
+  if (typeof s.endsAt !== "number") return false;
+  if (s.endingEarly === undefined) return true;
+  const e = s.endingEarly as Record<string, unknown> | null;
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    typeof e.reason === "string" &&
+    typeof e.originalEndsAt === "number"
   );
 }
 
@@ -115,12 +140,22 @@ function normalizeStorage(rawStorage: Partial<StorageSchema>): StorageSchema {
       ? (rawPending as StorageSchema["pendingSettingsChange"])
       : null;
 
+  const focusOnlySites = isStringArray(rawStorage.focusOnlySites)
+    ? [...new Set(rawStorage.focusOnlySites.map(normalizeDomain))].filter((site) =>
+        blockedSites.includes(site),
+      )
+    : [...DEFAULT_STORAGE.focusOnlySites];
+
+  const focusSession = isValidFocusSession(rawStorage.focusSession) ? rawStorage.focusSession : null;
+
   return {
     blockedSites,
     blockWindows,
     frictionDelayMs,
     pendingRemovals,
     pendingSettingsChange,
+    focusOnlySites,
+    focusSession,
   };
 }
 
@@ -131,6 +166,8 @@ async function readStorage(): Promise<StorageSchema> {
     "frictionDelayMs",
     "pendingRemovals",
     "pendingSettingsChange",
+    "focusOnlySites",
+    "focusSession",
   ]);
 
   return normalizeStorage(rawStorage);
@@ -160,6 +197,8 @@ async function ensureStorageDefaults(): Promise<void> {
     "frictionDelayMs",
     "pendingRemovals",
     "pendingSettingsChange",
+    "focusOnlySites",
+    "focusSession",
   ]);
   const updates: Partial<StorageSchema> = {};
 
@@ -181,6 +220,14 @@ async function ensureStorageDefaults(): Promise<void> {
 
   if (!("pendingSettingsChange" in existing)) {
     updates.pendingSettingsChange = DEFAULT_STORAGE.pendingSettingsChange;
+  }
+
+  if (!Array.isArray(existing.focusOnlySites)) {
+    updates.focusOnlySites = DEFAULT_STORAGE.focusOnlySites;
+  }
+
+  if (!("focusSession" in existing)) {
+    updates.focusSession = DEFAULT_STORAGE.focusSession;
   }
 
   if (Object.keys(updates).length > 0) {
@@ -278,7 +325,7 @@ async function enforceTabIfNeeded(
 async function enforceOpenTabs(storage?: StorageSchema): Promise<number> {
   const currentStorage = storage ?? (await reconcilePending());
 
-  if (!isInBlockWindow(new Date(), currentStorage.blockWindows)) {
+  if (!isBlockingNow(currentStorage)) {
     return 0;
   }
 
@@ -296,15 +343,15 @@ async function enforceOpenTabs(storage?: StorageSchema): Promise<number> {
 
 async function syncBlockingState(storage?: StorageSchema): Promise<StorageSchema> {
   const currentStorage = storage ?? (await reconcilePending());
-  const isBlockingNow = isInBlockWindow(new Date(), currentStorage.blockWindows);
+  const isBlocking = isBlockingNow(currentStorage);
   const wasBlocking = await readLastKnownBlockingState();
 
-  if (isBlockingNow && wasBlocking !== true) {
+  if (isBlocking && wasBlocking !== true) {
     await enforceOpenTabs(currentStorage);
   }
 
-  if (wasBlocking !== isBlockingNow) {
-    await writeLastKnownBlockingState(isBlockingNow);
+  if (wasBlocking !== isBlocking) {
+    await writeLastKnownBlockingState(isBlocking);
   }
 
   return currentStorage;
@@ -312,7 +359,9 @@ async function syncBlockingState(storage?: StorageSchema): Promise<StorageSchema
 
 async function reconcilePending(): Promise<StorageSchema> {
   const storage = await readStorage();
-  const next = applyPendingSettingsToState(applyPendingRemovalsToState(storage));
+  const next = clearEndedFocusSession(
+    applyPendingSettingsToState(applyPendingRemovalsToState(storage)),
+  );
 
   if (next === storage) {
     // Still synced: a pass opening changes what is blocked without changing storage.
@@ -358,7 +407,9 @@ async function handleGetState(): Promise<GetStateResponse> {
     blockWindows: storage.blockWindows,
     frictionDelayMs: storage.frictionDelayMs,
     pendingSettingsChange: storage.pendingSettingsChange,
-    isBlocking: activeWindow !== null,
+    focusOnlySites: storage.focusOnlySites,
+    focusSession: isFocusSessionActive(storage) ? storage.focusSession : null,
+    isBlocking: isBlockingNow(storage),
     activeWindow,
   };
 }
@@ -393,7 +444,7 @@ async function handleQueueRemove(message: QueueRemoveMessage): Promise<RuntimeRe
     return errorResponse("Domain is not currently blocked.");
   }
 
-  if (!isInBlockWindow(new Date(), storage.blockWindows)) {
+  if (!isSiteEnforced(storage, domain)) {
     const nextStorage = removeDomainFromState(storage, domain);
 
     if (nextStorage !== storage) {
@@ -467,7 +518,7 @@ async function handleUpdateSettings(
   };
 
   const weakening = isWeakeningSettingsChange(storage, proposed);
-  const inBlock = isInBlockWindow(new Date(), storage.blockWindows);
+  const inBlock = isBlockingNow(storage);
 
   if (weakening && inBlock) {
     const reason = (message.reason ?? "").trim();
@@ -509,6 +560,78 @@ async function handleCancelSettings(_message: CancelSettingsMessage): Promise<Ru
   return { ok: true };
 }
 
+async function handleStartFocus(message: StartFocusMessage): Promise<RuntimeResponse> {
+  if (!(Number.isFinite(message.minutes) && message.minutes > 0)) {
+    return errorResponse("Enter a number of minutes.");
+  }
+
+  const nextStorage = startFocusSession(await reconcilePending(), message.minutes);
+
+  await writeStorage(nextStorage);
+  await applyBlockingChange(nextStorage);
+  return { ok: true };
+}
+
+async function handleEndFocus(message: EndFocusMessage): Promise<RuntimeResponse> {
+  const storage = await reconcilePending();
+  const reason = message.reason.trim();
+
+  if (!reason) {
+    return errorResponse("A reason is required to end a focus session early.");
+  }
+
+  if (!isFocusSessionActive(storage)) {
+    return errorResponse("No focus session is running.");
+  }
+
+  const nextStorage = requestFocusSessionEnd(storage, reason);
+
+  if (nextStorage === storage) {
+    return errorResponse("The session ends before the wait would. Let it run out.");
+  }
+
+  await writeStorage(nextStorage);
+  await scheduleNextChange(nextStorage);
+  return { ok: true };
+}
+
+async function handleCancelEndFocus(): Promise<RuntimeResponse> {
+  const storage = await reconcilePending();
+  const nextStorage = cancelFocusSessionEnd(storage);
+
+  if (nextStorage !== storage) {
+    await writeStorage(nextStorage);
+    await scheduleNextChange(nextStorage);
+  }
+
+  return { ok: true };
+}
+
+async function handleSetFocusOnly(message: SetFocusOnlyMessage): Promise<RuntimeResponse> {
+  const storage = await reconcilePending();
+  const domain = normalizeDomain(message.domain);
+
+  if (!storage.blockedSites.includes(domain)) {
+    return errorResponse("Domain is not currently blocked.");
+  }
+
+  // Loosening, so not while anything is blocked. Deliberately not queued: wait it out, or
+  // remove the site the usual way.
+  if (message.focusOnly && isBlockingNow(storage)) {
+    return errorResponse("A site can only be made focus only while nothing is blocked.");
+  }
+
+  const nextStorage = setFocusOnly(storage, domain, message.focusOnly);
+
+  if (nextStorage !== storage) {
+    await writeStorage(nextStorage);
+    // Making a site "always" can block it right now, so follow it like adding a site.
+    await applyBlockingChange(nextStorage);
+  }
+
+  return { ok: true };
+}
+
 async function handleRuntimeMessage(message: RuntimeMessage): Promise<RuntimeResponse> {
   switch (message.type) {
     case "GET_STATE":
@@ -523,6 +646,14 @@ async function handleRuntimeMessage(message: RuntimeMessage): Promise<RuntimeRes
       return handleUpdateSettings(message);
     case "CANCEL_SETTINGS":
       return handleCancelSettings(message);
+    case "START_FOCUS":
+      return handleStartFocus(message);
+    case "END_FOCUS":
+      return handleEndFocus(message);
+    case "CANCEL_END_FOCUS":
+      return handleCancelEndFocus();
+    case "SET_FOCUS_ONLY":
+      return handleSetFocusOnly(message);
     default:
       return errorResponse("Unsupported message type.");
   }

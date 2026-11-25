@@ -12,7 +12,7 @@
 
 ## Overview
 
-Focus Guard is a personal Chrome extension that blocks distracting websites on a configurable schedule. When a block window is active, blocked sites redirect to a custom page. The key feature is the **friction system**: removing a site or weakening settings during a block window requires you to type a reason and wait through a countdown delay — making impulsive bypassing harder and more deliberate.
+Focus Guard is a personal Chrome extension that blocks distracting websites on a configurable schedule, or on demand with a focus session. When a block window or focus session is active, blocked sites redirect to a custom page. The key feature is the **friction system**: removing a site or weakening settings during a block window requires you to type a reason and wait through a countdown delay — making impulsive bypassing harder and more deliberate.
 
 ---
 
@@ -20,15 +20,18 @@ Focus Guard is a personal Chrome extension that blocks distracting websites on a
 
 1. **Add sites to block** via the popup (Sites tab)
 2. **Configure block windows** — set which days and time ranges should be enforced (Schedule tab)
-3. **Blocked sites redirect** to the blocked page during active windows
-4. **Unblocking a site or weakening settings during a block window** requires a typed reason and a countdown delay before the change takes effect. A site can be unblocked for a set number of minutes (a pass) and is blocked again afterwards, or removed for good
-5. **Pending changes apply automatically** via a background alarm; the popup shows live countdowns
+3. **Start a focus session** ("Focus for 45 min") to block on demand. Sites flagged *focus only* are blocked only in sessions, not in scheduled windows
+4. **Blocked sites redirect** to the blocked page during active windows and sessions
+5. **Unblocking a site, ending a session early, or weakening settings during a block window or session** requires a typed reason and a countdown delay before the change takes effect. A site can be unblocked for a set number of minutes (a pass) and is blocked again afterwards, or removed for good
+6. **Pending changes apply automatically** via a background alarm; the popup shows live countdowns
 
 ---
 
 ## Key Features
 
 - Scheduled block windows (configurable days and time ranges)
+- Focus sessions — block now for N minutes; extending is instant, ending early costs a reason + wait
+- Per-site "focus only" flag — blocked in focus sessions only, reachable in scheduled windows
 - Friction-based site removal — reason prompt + countdown, not just a click
 - Timed passes — unblock a site for a chosen number of minutes; it re-blocks itself
 - Protected settings — weakening during a block window requires friction

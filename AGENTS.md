@@ -9,6 +9,8 @@ deliberate friction to prevent impulsive disabling. Built with TypeScript + Vite
 
 - Block domains and all their subdomains
 - Time-based blocking windows (user-editable via the popup Schedule tab)
+- Ad-hoc focus sessions ("focus for 45 min"); a site can be flagged focus only, so it is
+  blocked in sessions but not in scheduled windows
 - Friction layer: weakening changes during a block window require deliberate effort, not a single click
 - Local only — no server, no auth, no backend
 - Clean minimal UI in the popup
@@ -42,16 +44,22 @@ conscious friction and breaks the autopilot loop.
 The popup has two distinct modes:
 
 - **Outside block window**: normal UI, add/remove sites freely, edit schedule freely, no friction
-- **Inside block window**: weakening changes (remove site, remove window, reduce delay) require
-  intention prompt + delay; strengthening changes (add site, add window, increase delay) are always instant
+- **Inside block window or focus session**: weakening changes (remove site, remove window, reduce delay,
+  end a session early) require intention prompt + delay; strengthening changes (add site, add window,
+  increase delay, start or extend a session) are always instant
 
 **4. Friction applies to weakening changes only**
-- Removing a blocked site → friction if in block window
+- Removing a blocked site → friction if the site is blocked right now (in a session, or in a
+  block window and not focus only)
 - Removing or editing a block window → friction if in block window
 - Reducing the friction delay → friction if in block window
 - Adding a site → always instant
 - Adding a new block window → always instant
 - Increasing the friction delay → always instant
+- Starting or extending a focus session → always instant (extending also cancels a pending early end)
+- Ending a focus session early → reason + delay, cancelable
+- Flagging a site "always" → always instant
+- Flagging a site "focus only" → refused while a window or session is active (not queued)
 
 ---
 
@@ -148,12 +156,20 @@ export interface PendingSettingsChange {
   applyAt: number;
 }
 
+export interface FocusSession {
+  endsAt: number;
+  // set while an early end waits: endsAt pulled in, cancel restores originalEndsAt
+  endingEarly?: { reason: string; originalEndsAt: number };
+}
+
 export interface StorageSchema {
   blockedSites: string[];
   blockWindows: BlockWindow[];
   frictionDelayMs: number;
   pendingRemovals: PendingRemoval[];
   pendingSettingsChange: PendingSettingsChange | null;
+  focusOnlySites: string[]; // subset of blockedSites, blocked only in a focus session
+  focusSession: FocusSession | null;
 }
 ```
 
@@ -236,12 +252,16 @@ and the apex domain. No extra work needed — just use that pattern.
 
 | type              | payload                                              | returns                                                                    |
 | ----------------- | ---------------------------------------------------- | -------------------------------------------------------------------------- |
-| `GET_STATE`       | —                                                    | `{ sites, pendingRemovals, blockWindows, frictionDelayMs, pendingSettingsChange, isBlocking, activeWindow }` |
+| `GET_STATE`       | —                                                    | `{ sites, pendingRemovals, blockWindows, frictionDelayMs, pendingSettingsChange, focusOnlySites, focusSession, isBlocking, activeWindow }` — `isBlocking` is true in a window or a session |
 | `ADD_SITE`        | `{ domain }`                                         | `{ ok }`                                                                   |
-| `QUEUE_REMOVE`    | `{ domain, reason, minutes? }`                       | `{ ok, appliedImmediately, applyAt }` — instant if outside window; `minutes` makes it a pass |
+| `QUEUE_REMOVE`    | `{ domain, reason, minutes? }`                       | `{ ok, appliedImmediately, applyAt }` — instant if the site is not blocked right now; `minutes` makes it a pass |
 | `CANCEL_REMOVE`   | `{ domain }`                                         | `{ ok }` — cancels a wait, or ends an open pass                             |
-| `UPDATE_SETTINGS` | `{ blockWindows, frictionDelayMs, reason? }`         | `{ ok, appliedImmediately, applyAt }` — queued if weakening + in window    |
+| `UPDATE_SETTINGS` | `{ blockWindows, frictionDelayMs, reason? }`         | `{ ok, appliedImmediately, applyAt }` — queued if weakening + in window or session |
 | `CANCEL_SETTINGS` | —                                                    | `{ ok }`                                                                   |
+| `START_FOCUS`     | `{ minutes }`                                        | `{ ok }` — starts a session, or extends a running one; instant             |
+| `END_FOCUS`       | `{ reason }`                                         | `{ ok }` — session ends after the friction delay; error if it ends sooner anyway |
+| `CANCEL_END_FOCUS`| —                                                    | `{ ok }`                                                                   |
+| `SET_FOCUS_ONLY`  | `{ domain, focusOnly }`                              | `{ ok }` — `focusOnly: true` refused while blocking                        |
 
 ---
 
@@ -250,10 +270,13 @@ and the apex domain. No extra work needed — just use that pattern.
 ### Two tabs
 
 **Sites tab**
-- Status banner when in a block window
-- List of blocked sites
-  - Outside block window: ✕ removes instantly
-  - Inside block window: "Request removal" → intention textarea + "Unblock for N min" → countdown on confirm
+- No session: `Focus for [45] min [Start]` row. In a session: a red banner with the time left,
+  `+15 min` and `end early` (reason → wait); while an early end waits it shows `ending in` + `cancel`
+- Status banner when in a block window (hidden during a session)
+- List of blocked sites, each with an `always` / `focus only` chip (inert when the click would
+  loosen while blocking)
+  - Site not blocked right now: ✕ removes instantly
+  - Site blocked right now: "Request removal" → intention textarea + "Unblock for N min" → countdown on confirm
     - With a length it is a pass: the site stays on the list, opens after the wait, and is blocked again when the length runs out
     - With the length left empty it is a permanent removal
 - Waiting rows show `15 min pass in Xm Ys [cancel]` or `removal in Xm Ys [cancel]`; an open pass shows `open for Xm Ys [end now]`
@@ -275,7 +298,7 @@ and the apex domain. No extra work needed — just use that pattern.
 
 - Full screen, dark background with amber glow
 - Show which domain was blocked (passed as `?domain=` query param from DNR redirect)
-- Show current block window label and end time (from `chrome.storage.sync`)
+- Show current block window label and end time (from `chrome.storage.sync`), or "Focus session" and its end time during a session
 - Motivational line — dry, not preachy: "You set this up for a reason."
 - No bypass controls
 

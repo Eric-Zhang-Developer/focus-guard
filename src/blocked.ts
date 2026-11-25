@@ -1,5 +1,5 @@
-import { getCurrentBlockWindow } from "./background-core";
-import type { BlockWindow } from "./types";
+import { getCurrentBlockWindow, isFocusSessionActive } from "./background-core";
+import type { BlockWindow, FocusSession } from "./types";
 
 const domain = new URLSearchParams(window.location.search).get("domain");
 
@@ -11,9 +11,16 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-chrome.storage.sync.get(["blockWindows"], (items) => {
+chrome.storage.sync.get(["blockWindows", "focusSession"], (items) => {
   const blockWindows: BlockWindow[] = Array.isArray(items.blockWindows) ? items.blockWindows : [];
-  const active = getCurrentBlockWindow(new Date(), blockWindows);
+  const focusSession: FocusSession | null =
+    typeof items.focusSession?.endsAt === "number" ? items.focusSession : null;
+  const sessionEnd =
+    focusSession && isFocusSessionActive({ focusSession }) ? new Date(focusSession.endsAt) : null;
+  // A session blocks more than a window does, so it is the one to name.
+  const active = sessionEnd
+    ? { label: "Focus session", endHour: sessionEnd.getHours(), endMin: sessionEnd.getMinutes() }
+    : getCurrentBlockWindow(new Date(), blockWindows);
 
   if (!active) return;
 
