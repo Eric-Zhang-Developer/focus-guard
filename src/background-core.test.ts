@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_FRICTION_DELAY_MS } from "./config";
+import { DEFAULT_BLOCK_WINDOWS, DEFAULT_FRICTION_DELAY_MS } from "./config";
 import {
   addDomainToState,
   getActiveBlockedSites,
@@ -14,7 +14,9 @@ import {
   getBlockedDomainForUrl,
   getCurrentBlockWindow,
   getHostnameFromUrl,
+  getNextBlockWindowStart,
   getNextPendingChangeAt,
+  getWeekSegments,
   isFocusSessionActive,
   isInBlockWindow,
   isLikelyDomain,
@@ -130,6 +132,112 @@ describe("background-core", () => {
       expect(isInBlockWindow(new Date("2026-03-16T00:00:00"), allMonday)).toBe(true);
       expect(isInBlockWindow(new Date("2026-03-16T23:59:00"), allMonday)).toBe(true);
       expect(isInBlockWindow(new Date("2026-03-17T00:00:00"), allMonday)).toBe(false);
+    });
+  });
+
+  describe("getWeekSegments", () => {
+    const bars = (windows: BlockWindow[], day: number) =>
+      getWeekSegments(windows)[day]!.map(({ start, end, overnight }) => ({ start, end, overnight }));
+
+    it("draws a same-day window as one bar on each of its days", () => {
+      const morning: BlockWindow[] = [
+        { label: "AM", days: [1, 3], startHour: 9, startMin: 0, endHour: 12, endMin: 30 },
+      ];
+
+      expect(bars(morning, 1)).toEqual([{ start: 540, end: 750, overnight: false }]);
+      expect(bars(morning, 3)).toEqual([{ start: 540, end: 750, overnight: false }]);
+      expect(bars(morning, 2)).toEqual([]);
+    });
+
+    it("splits an overnight window across its start day and the next", () => {
+      const fridayNight: BlockWindow[] = [
+        { label: "Late", days: [5], startHour: 22, startMin: 30, endHour: 7, endMin: 0 },
+      ];
+
+      expect(bars(fridayNight, 5)).toEqual([{ start: 1350, end: 1440, overnight: true }]);
+      expect(bars(fridayNight, 6)).toEqual([{ start: 0, end: 420, overnight: true }]);
+    });
+
+    it("carries a Sunday-night window into Monday", () => {
+      const sundayNight: BlockWindow[] = [
+        { label: "Late", days: [0], startHour: 23, startMin: 0, endHour: 1, endMin: 0 },
+      ];
+
+      expect(bars(sundayNight, 0)).toEqual([{ start: 1380, end: 1440, overnight: true }]);
+      expect(bars(sundayNight, 1)).toEqual([{ start: 0, end: 60, overnight: true }]);
+    });
+
+    it("draws equal start and end as 24 hours", () => {
+      const fromNine: BlockWindow[] = [
+        { label: "Day", days: [2], startHour: 9, startMin: 0, endHour: 9, endMin: 0 },
+      ];
+      const allMonday: BlockWindow[] = [
+        { label: "All day", days: [1], startHour: 0, startMin: 0, endHour: 0, endMin: 0 },
+      ];
+
+      expect(bars(fromNine, 2)).toEqual([{ start: 540, end: 1440, overnight: true }]);
+      expect(bars(fromNine, 3)).toEqual([{ start: 0, end: 540, overnight: true }]);
+      expect(bars(allMonday, 1)).toEqual([{ start: 0, end: 1440, overnight: false }]);
+      expect(bars(allMonday, 2)).toEqual([]);
+    });
+
+    it("stops a window that ends at 00:00 at midnight", () => {
+      const evening: BlockWindow[] = [
+        { label: "Eve", days: [4], startHour: 20, startMin: 0, endHour: 0, endMin: 0 },
+      ];
+
+      expect(bars(evening, 4)).toEqual([{ start: 1200, end: 1440, overnight: false }]);
+      expect(bars(evening, 5)).toEqual([]);
+    });
+
+    it("sorts several windows on a day by start", () => {
+      const windows: BlockWindow[] = [
+        { label: "PM", days: [1], startHour: 14, startMin: 0, endHour: 17, endMin: 0 },
+        { label: "Late", days: [0, 1], startHour: 22, startMin: 0, endHour: 7, endMin: 0 },
+        { label: "AM", days: [1], startHour: 9, startMin: 0, endHour: 12, endMin: 0 },
+      ];
+
+      expect(getWeekSegments(windows)[1]!.map((s) => [s.window.label, s.start, s.end])).toEqual([
+        ["Late", 0, 420],
+        ["AM", 540, 720],
+        ["PM", 840, 1020],
+        ["Late", 1320, 1440],
+      ]);
+    });
+  });
+
+  describe("getNextBlockWindowStart", () => {
+    // Defaults: Mon–Fri 09:00–12:00 and 14:00–17:00. 2026-03-16 is a Monday.
+    it.each([
+      ["before the first window today", "2026-03-16T08:00:00", "2026-03-16T09:00:00"],
+      ["between today's windows", "2026-03-16T12:30:00", "2026-03-16T14:00:00"],
+      ["exactly at a start, which is already running", "2026-03-16T09:00:00", "2026-03-16T14:00:00"],
+      ["after Friday's last window", "2026-03-20T18:00:00", "2026-03-23T09:00:00"],
+      ["on a Sunday", "2026-03-22T10:00:00", "2026-03-23T09:00:00"],
+    ])("finds the next start %s", (_label, now, expected) => {
+      const next = getNextBlockWindowStart(new Date(now), DEFAULT_BLOCK_WINDOWS);
+
+      expect(next?.at).toEqual(new Date(expected));
+    });
+
+    it("looks a full week ahead for a window that only runs once a week", () => {
+      const mondays: BlockWindow[] = [
+        { label: "Weekly", days: [1], startHour: 9, startMin: 0, endHour: 10, endMin: 0 },
+      ];
+
+      const next = getNextBlockWindowStart(new Date("2026-03-16T09:30:00"), mondays);
+
+      expect(next?.window.label).toBe("Weekly");
+      expect(next?.at).toEqual(new Date("2026-03-23T09:00:00"));
+    });
+
+    it("returns null with no windows or no days", () => {
+      const noDays: BlockWindow[] = [
+        { label: "Never", days: [], startHour: 9, startMin: 0, endHour: 10, endMin: 0 },
+      ];
+
+      expect(getNextBlockWindowStart(new Date("2026-03-16T08:00:00"), [])).toBeNull();
+      expect(getNextBlockWindowStart(new Date("2026-03-16T08:00:00"), noDays)).toBeNull();
     });
   });
 
