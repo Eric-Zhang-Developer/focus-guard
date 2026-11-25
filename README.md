@@ -20,10 +20,11 @@ Focus Guard is a personal Chrome extension that blocks distracting websites on a
 
 1. **Add sites to block** via the popup or the settings page
 2. **Configure block windows** on the settings page (the popup's Settings link) — set which days and time ranges should be enforced, and see them on a week view
-3. **Start a focus session** ("Focus for 45 min") from the popup to block on demand. Sites flagged *focus only* (set on the settings page) are blocked only in sessions, not in scheduled windows
-4. **Blocked sites redirect** to the blocked page during active windows and sessions
-5. **Unblocking a site, ending a session early, or weakening settings during a block window or session** requires a typed reason and a countdown delay before the change takes effect. A site can be unblocked for a set number of minutes (a pass) and is blocked again afterwards, or removed for good
-6. **Pending changes apply automatically** via a background alarm; the popup shows live countdowns
+3. **Allow an address inside a blocked site** on the settings page — `music.youtube.com` stays open while `youtube.com` is blocked. Allowing can only be done while nothing is blocked; stopping is instant
+4. **Start a focus session** ("Focus for 45 min") from the popup to block on demand. Sites flagged *focus only* (set on the settings page) are blocked only in sessions, not in scheduled windows
+5. **Blocked sites redirect** to the blocked page during active windows and sessions
+6. **Unblocking a site, ending a session early, or weakening settings during a block window or session** requires a typed reason and a countdown delay before the change takes effect. A site can be unblocked for a set number of minutes (a pass) and is blocked again afterwards, or removed for good
+7. **Pending changes apply automatically** via a background alarm; the popup shows live countdowns
 
 ---
 
@@ -31,6 +32,7 @@ Focus Guard is a personal Chrome extension that blocks distracting websites on a
 
 - Scheduled block windows (configurable days and time ranges)
 - Focus sessions — block now for N minutes; extending is instant, ending early costs a reason + wait
+- Allow list — keep an address inside a blocked site open (`music.youtube.com` inside `youtube.com`)
 - Per-site "focus only" flag — blocked in focus sessions only, reachable in scheduled windows
 - Friction-based site removal — reason prompt + countdown, not just a click
 - Timed passes — unblock a site for a chosen number of minutes; it re-blocks itself

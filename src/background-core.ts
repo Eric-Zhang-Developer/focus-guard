@@ -2,6 +2,7 @@ import { DEFAULT_BLOCK_WINDOWS, DEFAULT_FRICTION_DELAY_MS } from "./config";
 import type { BlockWindow, DayOfWeek, PendingRemoval, PendingSettingsChange, StorageSchema } from "./types";
 
 const REDIRECT_ACTION = "redirect" as chrome.declarativeNetRequest.RuleActionType;
+const ALLOW_ACTION = "allow" as chrome.declarativeNetRequest.RuleActionType;
 const MAIN_FRAME_RESOURCE =
   "main_frame" as chrome.declarativeNetRequest.ResourceType;
 const TAB_MATCH_PROTOCOLS = new Set(["http:", "https:"]);
@@ -64,10 +65,26 @@ export function doesHostnameMatchBlockedDomain(hostname: string, blockedDomain: 
   );
 }
 
-export function getBlockedDomainForUrl(url: string, blockedSites: string[]): string | null {
+// An allowed entry must sit strictly inside a blocked site and must not equal or contain
+// one, so an exception can never quietly switch a whole block off.
+export function canAllow(domain: string, blockedSites: string[]): boolean {
+  return (
+    !blockedSites.some((site) => doesHostnameMatchBlockedDomain(site, domain)) &&
+    blockedSites.some((site) => doesHostnameMatchBlockedDomain(domain, site))
+  );
+}
+
+export function getBlockedDomainForUrl(
+  url: string,
+  blockedSites: string[],
+  allowedSites: string[],
+): string | null {
   const hostname = getHostnameFromUrl(url);
 
-  if (hostname === null) {
+  if (
+    hostname === null ||
+    allowedSites.some((allowed) => doesHostnameMatchBlockedDomain(hostname, allowed))
+  ) {
     return null;
   }
 
@@ -259,10 +276,17 @@ export function getNextPendingChangeAt(
   return upcoming.length > 0 ? Math.min(...upcoming) : null;
 }
 
-export function buildDynamicRules(domains: string[]): chrome.declarativeNetRequest.Rule[] {
+export function buildDynamicRules(
+  domains: string[],
+  allowedSites: string[],
+): chrome.declarativeNetRequest.Rule[] {
   const normalizedDomains = [...new Set(domains.map(normalizeDomain).filter(isLikelyDomain))];
+  // Only exceptions inside a site blocked right now; with nothing blocked there is nothing to except.
+  const allowedDomains = [
+    ...new Set(allowedSites.map(normalizeDomain).filter(isLikelyDomain)),
+  ].filter((domain) => canAllow(domain, normalizedDomains));
 
-  return normalizedDomains.map((domain, index) => ({
+  const redirectRules = normalizedDomains.map((domain, index) => ({
     id: index + 1,
     priority: 1,
     action: {
@@ -276,6 +300,19 @@ export function buildDynamicRules(domains: string[]): chrome.declarativeNetReque
       resourceTypes: [MAIN_FRAME_RESOURCE],
     },
   }));
+
+  // Higher priority than the redirects, so allow wins over block.
+  const allowRules = allowedDomains.map((domain, index) => ({
+    id: normalizedDomains.length + index + 1,
+    priority: 2,
+    action: { type: ALLOW_ACTION },
+    condition: {
+      urlFilter: `||${domain}^`,
+      resourceTypes: [MAIN_FRAME_RESOURCE],
+    },
+  }));
+
+  return [...redirectRules, ...allowRules];
 }
 
 export function addDomainToState(storage: StorageSchema, domain: string): StorageSchema {
@@ -303,6 +340,8 @@ export function addDomainToState(storage: StorageSchema, domain: string): Storag
     ...storage,
     blockedSites,
     pendingRemovals,
+    // Blocking an allowed address explicitly wins over the exception.
+    allowedSites: storage.allowedSites.filter((site) => canAllow(site, blockedSites)),
   };
 }
 
@@ -326,6 +365,7 @@ export function removeDomainFromState(storage: StorageSchema, domain: string): S
     pendingRemovals,
     // Otherwise a site removed and added back later would quietly return as focus only.
     focusOnlySites: storage.focusOnlySites.filter((site) => site !== normalizedDomain),
+    allowedSites: storage.allowedSites.filter((site) => canAllow(site, blockedSites)),
   };
 }
 
@@ -473,11 +513,14 @@ export function applyPendingRemovalsToState(
       .map((removal) => removal.domain),
   );
 
+  const blockedSites = storage.blockedSites.filter((blockedSite) => !removedDomains.has(blockedSite));
+
   return {
     ...storage,
-    blockedSites: storage.blockedSites.filter((blockedSite) => !removedDomains.has(blockedSite)),
+    blockedSites,
     pendingRemovals,
     focusOnlySites: storage.focusOnlySites.filter((site) => !removedDomains.has(site)),
+    allowedSites: storage.allowedSites.filter((site) => canAllow(site, blockedSites)),
   };
 }
 

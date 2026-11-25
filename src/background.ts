@@ -4,6 +4,7 @@ import {
   applyPendingRemovalsToState,
   applyPendingSettingsToState,
   buildDynamicRules,
+  canAllow,
   cancelFocusSessionEnd,
   cancelPendingRemoval,
   cancelSettingsChange,
@@ -28,6 +29,7 @@ import { DEFAULT_BLOCK_WINDOWS, DEFAULT_FRICTION_DELAY_MS } from "./config";
 import { DEFAULT_STORAGE } from "./types";
 import type {
   AddSiteMessage,
+  AllowSiteMessage,
   BlockWindow,
   CancelRemoveMessage,
   CancelSettingsMessage,
@@ -36,6 +38,7 @@ import type {
   FocusSession,
   GetStateResponse,
   QueueRemoveMessage,
+  RemoveAllowedMessage,
   RuntimeMessage,
   RuntimeResponse,
   SetFocusOnlyMessage,
@@ -148,6 +151,12 @@ function normalizeStorage(rawStorage: Partial<StorageSchema>): StorageSchema {
 
   const focusSession = isValidFocusSession(rawStorage.focusSession) ? rawStorage.focusSession : null;
 
+  const allowedSites = isStringArray(rawStorage.allowedSites)
+    ? [...new Set(rawStorage.allowedSites.map(normalizeDomain).filter(isLikelyDomain))].filter(
+        (site) => canAllow(site, blockedSites),
+      )
+    : [...DEFAULT_STORAGE.allowedSites];
+
   return {
     blockedSites,
     blockWindows,
@@ -156,6 +165,7 @@ function normalizeStorage(rawStorage: Partial<StorageSchema>): StorageSchema {
     pendingSettingsChange,
     focusOnlySites,
     focusSession,
+    allowedSites,
   };
 }
 
@@ -168,6 +178,7 @@ async function readStorage(): Promise<StorageSchema> {
     "pendingSettingsChange",
     "focusOnlySites",
     "focusSession",
+    "allowedSites",
   ]);
 
   return normalizeStorage(rawStorage);
@@ -199,6 +210,7 @@ async function ensureStorageDefaults(): Promise<void> {
     "pendingSettingsChange",
     "focusOnlySites",
     "focusSession",
+    "allowedSites",
   ]);
   const updates: Partial<StorageSchema> = {};
 
@@ -230,6 +242,10 @@ async function ensureStorageDefaults(): Promise<void> {
     updates.focusSession = DEFAULT_STORAGE.focusSession;
   }
 
+  if (!Array.isArray(existing.allowedSites)) {
+    updates.allowedSites = DEFAULT_STORAGE.allowedSites;
+  }
+
   if (Object.keys(updates).length > 0) {
     await chrome.storage.sync.set(updates);
   }
@@ -256,12 +272,12 @@ function syncRules(): Promise<void> {
 
 // Reads storage when it runs, not when it was queued, so the last sync always wins.
 async function applyRules(): Promise<void> {
-  const domains = getActiveBlockedSites(await readStorage());
+  const storage = await readStorage();
   const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
 
   await chrome.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: existingRules.map((rule) => rule.id),
-    addRules: buildDynamicRules(domains),
+    addRules: buildDynamicRules(getActiveBlockedSites(storage), storage.allowedSites),
   });
 }
 
@@ -312,7 +328,11 @@ async function enforceTabIfNeeded(
 
   const currentStorage = storage ?? (await reconcilePending());
 
-  const matchedDomain = getBlockedDomainForUrl(tabUrl, getActiveBlockedSites(currentStorage));
+  const matchedDomain = getBlockedDomainForUrl(
+    tabUrl,
+    getActiveBlockedSites(currentStorage),
+    currentStorage.allowedSites,
+  );
 
   if (matchedDomain === null) {
     return false;
@@ -403,6 +423,7 @@ async function handleGetState(): Promise<GetStateResponse> {
 
   return {
     sites: storage.blockedSites,
+    allowedSites: storage.allowedSites,
     pendingRemovals: storage.pendingRemovals,
     blockWindows: storage.blockWindows,
     frictionDelayMs: storage.frictionDelayMs,
@@ -632,6 +653,53 @@ async function handleSetFocusOnly(message: SetFocusOnlyMessage): Promise<Runtime
   return { ok: true };
 }
 
+async function handleAllowSite(message: AllowSiteMessage): Promise<RuntimeResponse> {
+  const storage = await reconcilePending();
+  const domain = normalizeDomain(message.domain);
+
+  if (!isLikelyDomain(domain)) {
+    return errorResponse("Invalid domain.");
+  }
+
+  // Loosening, so not while anything is blocked. Deliberately not queued, like focus only.
+  if (isBlockingNow(storage)) {
+    return errorResponse("An address can only be allowed while nothing is blocked.");
+  }
+
+  if (storage.blockedSites.includes(domain)) {
+    return errorResponse(`${domain} is on the block list. Remove it there instead.`);
+  }
+
+  if (!canAllow(domain, storage.blockedSites)) {
+    return errorResponse(
+      "Only an address inside a blocked site can be allowed, like music.youtube.com inside youtube.com.",
+    );
+  }
+
+  if (!storage.allowedSites.includes(domain)) {
+    await writeStorage({ ...storage, allowedSites: [...storage.allowedSites, domain] });
+    await syncRules();
+  }
+
+  return { ok: true };
+}
+
+async function handleRemoveAllowed(message: RemoveAllowedMessage): Promise<RuntimeResponse> {
+  const storage = await reconcilePending();
+  const domain = normalizeDomain(message.domain);
+  const allowedSites = storage.allowedSites.filter((site) => site !== domain);
+
+  if (allowedSites.length !== storage.allowedSites.length) {
+    const nextStorage = { ...storage, allowedSites };
+
+    await writeStorage(nextStorage);
+    // During a block, a tab open on that address is redirected at once.
+    await applyBlockingChange(nextStorage);
+  }
+
+  return { ok: true };
+}
+
 async function handleRuntimeMessage(message: RuntimeMessage): Promise<RuntimeResponse> {
   switch (message.type) {
     case "GET_STATE":
@@ -654,6 +722,10 @@ async function handleRuntimeMessage(message: RuntimeMessage): Promise<RuntimeRes
       return handleCancelEndFocus();
     case "SET_FOCUS_ONLY":
       return handleSetFocusOnly(message);
+    case "ALLOW_SITE":
+      return handleAllowSite(message);
+    case "REMOVE_ALLOWED":
+      return handleRemoveAllowed(message);
     default:
       return errorResponse("Unsupported message type.");
   }
