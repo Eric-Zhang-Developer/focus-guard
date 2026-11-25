@@ -45,6 +45,8 @@ export interface StorageSchema {
   // Sites blocked only during a focus session, not in scheduled windows. A subset of blockedSites.
   focusOnlySites: string[];
   focusSession: FocusSession | null;
+  // Addresses left open inside a blocked site. Each is a strict subdomain of a blocked site.
+  allowedSites: string[];
 }
 
 export const DEFAULT_STORAGE: StorageSchema = {
@@ -55,6 +57,7 @@ export const DEFAULT_STORAGE: StorageSchema = {
   pendingSettingsChange: null,
   focusOnlySites: [],
   focusSession: null,
+  allowedSites: [],
 };
 
 export interface GetStateMessage {
@@ -110,6 +113,16 @@ export interface SetFocusOnlyMessage {
   focusOnly: boolean;
 }
 
+export interface AllowSiteMessage {
+  type: "ALLOW_SITE";
+  domain: string;
+}
+
+export interface RemoveAllowedMessage {
+  type: "REMOVE_ALLOWED";
+  domain: string;
+}
+
 export type RuntimeMessage =
   | GetStateMessage
   | AddSiteMessage
@@ -120,10 +133,13 @@ export type RuntimeMessage =
   | StartFocusMessage
   | EndFocusMessage
   | CancelEndFocusMessage
-  | SetFocusOnlyMessage;
+  | SetFocusOnlyMessage
+  | AllowSiteMessage
+  | RemoveAllowedMessage;
 
 export interface GetStateResponse {
   sites: string[];
+  allowedSites: string[];
   pendingRemovals: PendingRemoval[];
   blockWindows: BlockWindow[];
   frictionDelayMs: number;

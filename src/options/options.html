@@ -62,10 +62,36 @@
         </div>
       </section>
 
-      <!-- 02 Schedule -->
-      <section aria-labelledby="s-schedule" class="flex flex-wrap gap-x-14 gap-y-6 border-t border-line py-10">
+      <!-- 02 Allowed -->
+      <section aria-labelledby="s-allowed" class="flex flex-wrap gap-x-14 gap-y-6 border-t border-line py-10">
         <div class="max-w-[300px] flex-[1_1_240px]">
           <p class="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-orange-400">02</p>
+          <details>
+            <summary class="flex min-h-11 cursor-pointer items-center gap-2.5">
+              <h2 id="s-allowed" class="text-[19px] font-semibold text-slate-100">Allowed</h2>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#7c8ba1" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.25"></circle><path d="M8 7.25v3.5"></path><path d="M8 5v.1"></path></svg>
+            </summary>
+            <p class="mt-1 text-sm text-slate-400">Stays open even when its site is blocked. Can only be added outside a block.</p>
+          </details>
+        </div>
+        <div class="min-w-0 flex-[999_1_480px]">
+          <div class="card">
+            <ul id="allowed-list"></ul>
+            <p id="allowed-empty" hidden class="border-b border-line px-5 py-4 text-sm text-slate-400">Nothing allowed yet.</p>
+            <div class="flex flex-wrap gap-2.5 bg-foot py-3.5 pl-3.5 pr-3">
+              <label for="add-allowed" class="sr-only">Address to allow</label>
+              <input id="add-allowed" type="text" placeholder="music.youtube.com" autocomplete="off" spellcheck="false" class="field min-w-0 flex-[1_1_220px] font-mono text-sm disabled:cursor-not-allowed disabled:opacity-40" />
+              <button id="add-allowed-btn" type="button" class="btn-quiet aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:border-edge aria-disabled:hover:bg-slate-900">Allow</button>
+            </div>
+          </div>
+          <p id="allowed-error" role="alert" hidden class="mt-2 text-sm text-red-400"></p>
+        </div>
+      </section>
+
+      <!-- 03 Schedule -->
+      <section aria-labelledby="s-schedule" class="flex flex-wrap gap-x-14 gap-y-6 border-t border-line py-10">
+        <div class="max-w-[300px] flex-[1_1_240px]">
+          <p class="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-orange-400">03</p>
           <details>
             <summary class="flex min-h-11 cursor-pointer items-center gap-2.5">
               <h2 id="s-schedule" class="text-[19px] font-semibold text-slate-100">Schedule</h2>
@@ -118,10 +144,10 @@
         </div>
       </section>
 
-      <!-- 03 Friction -->
+      <!-- 04 Friction -->
       <section aria-labelledby="s-friction" class="flex flex-wrap gap-x-14 gap-y-6 border-t border-line py-10">
         <div class="max-w-[300px] flex-[1_1_240px]">
-          <p class="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-orange-400">03</p>
+          <p class="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-orange-400">04</p>
           <details>
             <summary class="flex min-h-11 cursor-pointer items-center gap-2.5">
               <h2 id="s-friction" class="text-[19px] font-semibold text-slate-100">Friction</h2>

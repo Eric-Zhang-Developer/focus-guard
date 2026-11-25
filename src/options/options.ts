@@ -1,6 +1,7 @@
 import type { BlockWindow, DayOfWeek, GetStateResponse, RuntimeResponse } from "../types";
 import {
   crossesMidnight,
+  doesHostnameMatchBlockedDomain,
   getNextBlockWindowStart,
   getWeekSegments,
   isPassOpen,
@@ -263,6 +264,71 @@ function initAddSite(): void {
   };
 
   document.getElementById("add-site-btn")!.addEventListener("click", () => void submit());
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") void submit();
+  });
+}
+
+// ── allowed ───────────────────────────────────────────────────────────────────
+
+function renderAllowed(s: GetStateResponse): void {
+  document
+    .getElementById("allowed-list")!
+    .replaceChildren(...s.allowedSites.map((d) => buildAllowedRow(d, s.sites)));
+  document.getElementById("allowed-empty")!.hidden = s.allowedSites.length > 0;
+
+  // Allowing loosens a block, which the background refuses while anything is blocked.
+  const inertReason = s.isBlocking ? "Can only be allowed while nothing is blocked." : "";
+  const input = document.getElementById("add-allowed") as HTMLInputElement;
+  const btn = document.getElementById("add-allowed-btn")!;
+  input.disabled = s.isBlocking;
+  input.title = inertReason;
+  btn.title = inertReason;
+  if (s.isBlocking) btn.setAttribute("aria-disabled", "true");
+  else btn.removeAttribute("aria-disabled");
+}
+
+function buildAllowedRow(domain: string, sites: string[]): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = `${ROW_CLASS} border-b border-line`;
+  li.dataset["domain"] = domain;
+
+  const text = document.createElement("div");
+  text.className = "flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1";
+  const name = document.createElement("span");
+  name.className = "min-w-0 break-all font-mono text-sm text-emerald-300";
+  name.textContent = domain;
+  const inside = document.createElement("span");
+  inside.className = "text-[13px] text-slate-400";
+  inside.textContent = `inside ${sites.find((site) => doesHostnameMatchBlockedDomain(domain, site)) ?? ""}`;
+  text.append(name, inside);
+
+  // Tightening, so always live.
+  const remove = iconButton(`Stop allowing ${domain}`, null);
+  remove.addEventListener("click", async () => {
+    const errEl = document.getElementById("allowed-error")!;
+    showError(errEl, null);
+    showError(errEl, errorOf(await sendMessage({ type: "REMOVE_ALLOWED", domain })));
+  });
+
+  li.append(text, remove);
+  return li;
+}
+
+function initAddAllowed(): void {
+  const input = document.getElementById("add-allowed") as HTMLInputElement;
+  const errEl = document.getElementById("allowed-error")!;
+
+  const submit = async (): Promise<void> => {
+    showError(errEl, null);
+    if (state?.isBlocking || input.value.trim() === "") return;
+
+    const error = errorOf(await sendMessage({ type: "ALLOW_SITE", domain: input.value }));
+    showError(errEl, error);
+    if (error === null) input.value = "";
+  };
+
+  document.getElementById("add-allowed-btn")!.addEventListener("click", () => void submit());
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") void submit();
   });
@@ -612,6 +678,7 @@ async function reload(): Promise<void> {
   renderStatus(s);
   renderPendingSettings(s);
   renderSites(s);
+  renderAllowed(s);
   renderWeek(s);
   renderWindows(s);
   renderDelay(s);
@@ -626,6 +693,7 @@ async function refreshClock(): Promise<void> {
   state = s;
   renderStatus(s);
   renderSites(s);
+  renderAllowed(s);
   renderWeek(s);
 }
 
@@ -636,6 +704,7 @@ chrome.storage.onChanged.addListener((_changes, area) => {
 setInterval(() => void refreshClock(), 60_000);
 
 initAddSite();
+initAddAllowed();
 initCancelSettings();
 initAddWindowForm();
 initDelayControls();

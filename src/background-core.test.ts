@@ -7,6 +7,7 @@ import {
   applyPendingRemovalsToState,
   applyPendingSettingsToState,
   buildDynamicRules,
+  canAllow,
   cancelFocusSessionEnd,
   cancelSettingsChange,
   clearEndedFocusSession,
@@ -77,13 +78,13 @@ describe("background-core", () => {
   it("finds the blocked domain for matching tab URLs", () => {
     const blockedSites = ["reddit.com", "youtube.com"];
 
-    expect(getBlockedDomainForUrl("https://www.youtube.com/watch?v=123", blockedSites)).toBe(
+    expect(getBlockedDomainForUrl("https://www.youtube.com/watch?v=123", blockedSites, [])).toBe(
       "youtube.com",
     );
-    expect(getBlockedDomainForUrl("https://reddit.com/r/typescript", blockedSites)).toBe(
+    expect(getBlockedDomainForUrl("https://reddit.com/r/typescript", blockedSites, [])).toBe(
       "reddit.com",
     );
-    expect(getBlockedDomainForUrl("https://news.ycombinator.com", blockedSites)).toBeNull();
+    expect(getBlockedDomainForUrl("https://news.ycombinator.com", blockedSites, [])).toBeNull();
   });
 
   it("detects whether the current time is inside a block window", () => {
@@ -247,7 +248,7 @@ describe("background-core", () => {
       "https://www.youtube.com/watch?v=test",
       "reddit.com",
       "not-a-domain",
-    ]);
+    ], []);
 
     expect(rules).toHaveLength(2);
     expect(rules[0]).toMatchObject({
@@ -419,6 +420,115 @@ describe("background-core", () => {
     ])("enforces sites %s", (_label, storage, now, always, focusOnly) => {
       expect(isSiteEnforced(storage, "x.com", now)).toBe(always);
       expect(isSiteEnforced(storage, "mail.google.com", now)).toBe(focusOnly);
+    });
+  });
+
+  describe("the allow list", () => {
+    const minute = 60_000;
+    // Monday: 09:30 is inside the default morning window.
+    const inWindow = new Date("2026-03-16T09:30:00");
+    const youtubeWithMusic = testStorage({
+      blockedSites: ["youtube.com", "reddit.com"],
+      allowedSites: ["music.youtube.com"],
+    });
+
+    it.each([
+      ["a strict subdomain", "music.youtube.com", true],
+      ["a deeper subdomain", "a.music.youtube.com", true],
+      ["the blocked site itself", "youtube.com", false],
+      ["another blocked site", "reddit.com", false],
+      ["a parent of a blocked site", "google.com", false],
+      ["an unrelated address", "news.ycombinator.com", false],
+      ["not a domain", "music", false],
+    ])("allows %s only when it sits inside a blocked site", (_label, domain, expected) => {
+      expect(canAllow(domain, ["youtube.com", "reddit.com", "mail.google.com"])).toBe(expected);
+    });
+
+    it("refuses an address inside a blocked site that is blocked itself or contains one", () => {
+      expect(canAllow("music.youtube.com", ["youtube.com", "music.youtube.com"])).toBe(false);
+      expect(canAllow("music.youtube.com", ["youtube.com", "a.music.youtube.com"])).toBe(false);
+    });
+
+    it("leaves addresses under an allowed entry unmatched, and blocks the rest of the site", () => {
+      const match = (url: string) =>
+        getBlockedDomainForUrl(url, ["youtube.com"], ["music.youtube.com"]);
+
+      expect(match("https://music.youtube.com/watch?v=1")).toBeNull();
+      expect(match("https://foo.music.youtube.com/")).toBeNull();
+      expect(match("https://m.youtube.com/")).toBe("youtube.com");
+      expect(match("https://youtube.com/")).toBe("youtube.com");
+      expect(match("https://www.youtube.com/")).toBe("youtube.com");
+    });
+
+    it("builds allow rules at priority 2 with unique ids, only under an actively blocked site", () => {
+      const rules = buildDynamicRules(
+        ["youtube.com", "reddit.com"],
+        ["music.youtube.com", "old.reddit.com", "mail.google.com"],
+      );
+      const allowRules = rules.filter((rule) => rule.action.type === "allow");
+
+      expect(new Set(rules.map((rule) => rule.id)).size).toBe(rules.length);
+      expect(rules.every((rule) => rule.id > 0)).toBe(true);
+      expect(allowRules).toHaveLength(2);
+      expect(allowRules[0]).toMatchObject({
+        priority: 2,
+        action: { type: "allow" },
+        condition: { urlFilter: "||music.youtube.com^", resourceTypes: ["main_frame"] },
+      });
+      expect(allowRules[1]?.condition.urlFilter).toBe("||old.reddit.com^");
+      expect(rules.filter((rule) => rule.priority === 1)).toHaveLength(2);
+    });
+
+    it("builds no rules at all when nothing is blocked", () => {
+      expect(buildDynamicRules([], ["music.youtube.com"])).toEqual([]);
+    });
+
+    it("drops an allowed entry when that address gets blocked itself", () => {
+      const next = addDomainToState(youtubeWithMusic, "music.youtube.com");
+
+      expect(next.blockedSites).toContain("music.youtube.com");
+      expect(next.allowedSites).toEqual([]);
+    });
+
+    it("drops orphaned entries when their site is removed, and keeps ones still covered", () => {
+      const storage = testStorage({
+        blockedSites: ["youtube.com", "reddit.com", "old.reddit.com"],
+        allowedSites: ["music.youtube.com", "new.old.reddit.com"],
+      });
+
+      expect(removeDomainFromState(youtubeWithMusic, "youtube.com").allowedSites).toEqual([]);
+      expect(removeDomainFromState(youtubeWithMusic, "reddit.com").allowedSites).toEqual([
+        "music.youtube.com",
+      ]);
+      // new.old.reddit.com is still inside reddit.com once old.reddit.com goes.
+      expect(removeDomainFromState(storage, "old.reddit.com").allowedSites).toEqual([
+        "music.youtube.com",
+        "new.old.reddit.com",
+      ]);
+    });
+
+    it("drops orphaned entries when a queued removal applies", () => {
+      const t = inWindow.getTime();
+      const queued = queuePendingRemoval(youtubeWithMusic, "youtube.com", "done", t, 10 * minute)
+        .storage;
+
+      expect(applyPendingRemovalsToState(queued, t + 9 * minute).allowedSites).toEqual([
+        "music.youtube.com",
+      ]);
+      expect(applyPendingRemovalsToState(queued, t + 10 * minute).allowedSites).toEqual([]);
+    });
+
+    it("keeps every entry through a pass, open or ended", () => {
+      const t = inWindow.getTime();
+      const withPass = queuePendingRemoval(youtubeWithMusic, "youtube.com", "one video", t, 10 * minute, 15)
+        .storage;
+
+      expect(applyPendingRemovalsToState(withPass, t + 12 * minute).allowedSites).toEqual([
+        "music.youtube.com",
+      ]);
+      expect(applyPendingRemovalsToState(withPass, t + 25 * minute).allowedSites).toEqual([
+        "music.youtube.com",
+      ]);
     });
   });
 
