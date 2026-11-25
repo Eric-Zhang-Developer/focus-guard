@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/* The design's own tones. Plain slate, orange, red and emerald come from Tailwind's palette. */
+@theme {
+  --color-ink: #020617;
+  --color-card: #070d1c;
+  --color-foot: #050a17;
+  --color-field: #0b1324;
+  --color-line: #141d2f;
+  --color-edge: #1b2538;
+  --color-edge-hover: #2a3a57;
+  --color-quiet-hover: #16213a;
+  --color-row-hover: #0a1326;
+  --color-x-hover: #1c1018;
+  --color-muted: #7c8ba1;
+  --color-faint: #8391a7;
+  --color-ember: #7c4a1e;
+  --color-ember-bg: #2a1a0e;
+  --color-ember-hover: #3a2413;
+  --color-ember-edge: #a8632a;
+  --color-track: #0d1526;
+  --color-track-today: #111b30;
+  --color-tick: #18233a;
+  --color-tick-today: #1c2942;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  button {
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
+  }
+
+  button:not([aria-disabled="true"]):active {
+    transform: scale(0.97);
+  }
+
+  button:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid #fb923c;
+    outline-offset: 2px;
+  }
+
+  summary {
+    list-style: none;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+}
+
+@layer components {
+  .card {
+    @apply overflow-hidden rounded-[14px] border border-edge bg-card;
+  }
+
+  .field {
+    @apply h-11 rounded-[10px] border border-edge bg-field px-3.5 text-slate-100 placeholder:text-muted;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .field:focus {
+    outline: none;
+    border-color: #fb923c;
+    box-shadow: 0 0 0 3px rgb(251 146 60 / 0.18);
+  }
+
+  .btn-accent {
+    @apply h-11 rounded-[10px] border border-ember bg-ember-bg px-5 text-sm font-medium text-orange-300 hover:border-ember-edge hover:bg-ember-hover;
+  }
+
+  .btn-quiet {
+    @apply h-11 rounded-[10px] border border-edge bg-slate-900 px-5 text-sm font-medium text-slate-200 hover:border-edge-hover hover:bg-quiet-hover;
+  }
+
+  .icon-btn {
+    @apply flex size-10 shrink-0 items-center justify-center rounded-[10px] text-muted hover:bg-x-hover hover:text-red-400;
+  }
+
+  .icon-btn[aria-disabled="true"] {
+    @apply cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted;
+  }
+}
+
+/* Info toggles */
+summary svg {
+  transition: stroke 0.15s;
+}
+
+summary:hover svg {
+  stroke: #cbd5e1;
+}
+
+details[open] summary svg {
+  stroke: #fb923c;
+}
+
+details[open] > p {
+  animation: reveal 0.28s ease backwards;
+}
+
+/* Week view: bars grow in, a day after the other, on first paint only. */
+.bar {
+  transform-origin: left center;
+}
+
+.intro .bar {
+  animation: grow 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+
+.intro .day:nth-child(2) .bar { animation-delay: 0.05s; }
+.intro .day:nth-child(3) .bar { animation-delay: 0.1s; }
+.intro .day:nth-child(4) .bar { animation-delay: 0.15s; }
+.intro .day:nth-child(5) .bar { animation-delay: 0.2s; }
+.intro .day:nth-child(6) .bar { animation-delay: 0.25s; }
+.intro .day:nth-child(7) .bar { animation-delay: 0.3s; }
+
+.now {
+  animation: blink 2.4s ease-in-out infinite;
+}
+
+.pulse {
+  animation: blink 2s ease-in-out infinite;
+}
+
+@keyframes grow {
+  from { transform: scaleX(0); }
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(-4px); }
+}
+
+@keyframes blink {
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

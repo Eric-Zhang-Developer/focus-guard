@@ -18,9 +18,9 @@ Focus Guard is a personal Chrome extension that blocks distracting websites on a
 
 ## How It Works
 
-1. **Add sites to block** via the popup (Sites tab)
-2. **Configure block windows** — set which days and time ranges should be enforced (Schedule tab)
-3. **Start a focus session** ("Focus for 45 min") to block on demand. Sites flagged *focus only* are blocked only in sessions, not in scheduled windows
+1. **Add sites to block** via the popup or the settings page
+2. **Configure block windows** on the settings page (the popup's Settings link) — set which days and time ranges should be enforced, and see them on a week view
+3. **Start a focus session** ("Focus for 45 min") from the popup to block on demand. Sites flagged *focus only* (set on the settings page) are blocked only in sessions, not in scheduled windows
 4. **Blocked sites redirect** to the blocked page during active windows and sessions
 5. **Unblocking a site, ending a session early, or weakening settings during a block window or session** requires a typed reason and a countdown delay before the change takes effect. A site can be unblocked for a set number of minutes (a pass) and is blocked again afterwards, or removed for good
 6. **Pending changes apply automatically** via a background alarm; the popup shows live countdowns
@@ -35,7 +35,8 @@ Focus Guard is a personal Chrome extension that blocks distracting websites on a
 - Friction-based site removal — reason prompt + countdown, not just a click
 - Timed passes — unblock a site for a chosen number of minutes; it re-blocks itself
 - Protected settings — weakening during a block window requires friction
-- Pending change queue with live countdown timers in the popup
+- Pending change queue with live countdown timers
+- Full-tab settings page for the schedule, friction delay and per-site focus-only flag; the popup keeps the day-to-day controls
 - Blocked page shows which site was intercepted
 - Settings sync across sessions via `chrome.storage.sync`
 - Manifest V3 (service worker, `declarativeNetRequest`)
@@ -50,7 +51,7 @@ Focus Guard is a personal Chrome extension that blocks distracting websites on a
 |------|---------|
 | TypeScript | Type-safe source |
 | Vite + `@crxjs/vite-plugin` | Build and extension bundling |
-| Tailwind CSS v4 | Popup styling |
+| Tailwind CSS v4 | Popup and settings page styling |
 | Chrome MV3 APIs | `declarativeNetRequest`, `storage.sync`, `alarms` |
 
 ### Testing

@@ -113,6 +113,78 @@ export function isInBlockWindow(
   return getCurrentBlockWindow(now, windows) !== null;
 }
 
+export interface DaySegment {
+  window: BlockWindow;
+  start: number; // minutes after midnight
+  end: number; // minutes after midnight, up to 1440
+  overnight: boolean; // one half of a window that runs past midnight
+}
+
+// Same reading as getCurrentBlockWindow: an end at or before the start runs into the next
+// day, except an end of 00:00, which stops at midnight.
+export function crossesMidnight(window: BlockWindow): boolean {
+  const end = toMinutes(window.endHour, window.endMin);
+
+  return end > 0 && end <= toMinutes(window.startHour, window.startMin);
+}
+
+// The bars of the week view, one list per day indexed like Date.getDay(), sorted by start.
+// A window that crosses midnight is start→24:00 on the day it starts and 00:00→end on the next.
+export function getWeekSegments(windows: BlockWindow[]): DaySegment[][] {
+  const week: DaySegment[][] = [[], [], [], [], [], [], []];
+
+  for (const window of windows) {
+    const start = toMinutes(window.startHour, window.startMin);
+    const end = toMinutes(window.endHour, window.endMin);
+    const overnight = crossesMidnight(window);
+
+    for (const day of window.days) {
+      week[day].push({ window, start, end: end > start ? end : 24 * 60, overnight });
+
+      if (overnight) {
+        week[(day + 1) % 7].push({ window, start: 0, end, overnight });
+      }
+    }
+  }
+
+  for (const segments of week) {
+    segments.sort((a, b) => a.start - b.start);
+  }
+
+  return week;
+}
+
+// When the next scheduled window starts, looking up to a week ahead.
+export function getNextBlockWindowStart(
+  now: Date,
+  windows: BlockWindow[],
+): { window: BlockWindow; at: Date } | null {
+  let next: { window: BlockWindow; at: Date } | null = null;
+
+  for (let offset = 0; offset <= 7; offset++) {
+    const day = ((now.getDay() + offset) % 7) as DayOfWeek;
+
+    for (const window of windows) {
+      if (!window.days.includes(day)) continue;
+
+      // Built from calendar fields, not by adding milliseconds, so a DST change keeps 09:00 at 09:00.
+      const at = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + offset,
+        window.startHour,
+        window.startMin,
+      );
+
+      if (at > now && (next === null || at < next.at)) {
+        next = { window, at };
+      }
+    }
+  }
+
+  return next;
+}
+
 export function isPassOpen(removal: PendingRemoval, nowMs: number = Date.now()): boolean {
   return removal.reblockAt !== undefined && removal.applyAt <= nowMs && nowMs < removal.reblockAt;
 }

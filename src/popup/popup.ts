@@ -1,78 +1,8 @@
-import type {
-  BlockWindow,
-  DayOfWeek,
-  GetStateResponse,
-  PendingRemoval,
-  PendingSettingsChange,
-  RuntimeMessage,
-  RuntimeResponse,
-} from "../types";
+import type { GetStateResponse, PendingRemoval } from "../types";
 import { isLikelyDomain, isPassOpen, normalizeDomain } from "../background-core";
+import { clearCountdowns, fmtTime, sendMessage, startCountdown as startUiCountdown } from "../ui";
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function pad(n: number): string {
-  return n.toString().padStart(2, "0");
-}
-
-function fmtTime(hour: number, min: number): string {
-  return `${pad(hour)}:${pad(min)}`;
-}
-
-function fmtCountdown(msRemaining: number): string {
-  const totalSec = Math.max(0, Math.ceil(msRemaining / 1000));
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}m ${pad(s)}s`;
-}
-
-const DAY_ABBR = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-function fmtDays(days: DayOfWeek[]): string {
-  const sorted = [...days].sort((a, b) => a - b);
-  // Check if contiguous weekdays Mon–Fri
-  if (sorted.length === 5 && sorted.join() === "1,2,3,4,5") return "Mon–Fri";
-  if (sorted.length === 7) return "Every day";
-  if (sorted.length === 2 && sorted.join() === "0,6") return "Weekends";
-  return sorted.map((d) => DAY_ABBR[d]).join(", ");
-}
-
-function fmtWindow(w: BlockWindow): string {
-  // An end at or before the start means the window runs into the next day.
-  const nextDay = w.endHour * 60 + w.endMin <= w.startHour * 60 + w.startMin ? " (next day)" : "";
-  return `${fmtDays(w.days as DayOfWeek[])}  ·  ${fmtTime(w.startHour, w.startMin)}–${fmtTime(w.endHour, w.endMin)}${nextDay}`;
-}
-
-async function sendMessage(msg: RuntimeMessage): Promise<RuntimeResponse> {
-  return chrome.runtime.sendMessage(msg) as Promise<RuntimeResponse>;
-}
-
-// ── state ─────────────────────────────────────────────────────────────────────
-
-let state: GetStateResponse | null = null;
-const countdownTimers: number[] = [];
-
-function clearTimers(): void {
-  for (const id of countdownTimers) clearInterval(id);
-  countdownTimers.length = 0;
-}
-
-// ── tab switching ─────────────────────────────────────────────────────────────
-
-function switchTab(tab: "sites" | "schedule"): void {
-  document.querySelectorAll<HTMLElement>(".tab-panel").forEach((el) => el.classList.add("hidden"));
-  document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
-    const active = btn.dataset["tab"] === tab;
-    btn.classList.toggle("text-slate-100", active);
-    btn.classList.toggle("border-orange-400", active);
-    btn.classList.toggle("text-slate-500", !active);
-    btn.classList.toggle("border-transparent", !active);
-  });
-
-  document.getElementById(`tab-${tab}`)?.classList.remove("hidden");
-}
-
-// ── sites tab ─────────────────────────────────────────────────────────────────
+// ── sites ─────────────────────────────────────────────────────────────────────
 
 function renderSites(s: GetStateResponse): void {
   const list = document.getElementById("sites-list")!;
@@ -103,19 +33,8 @@ function renderSites(s: GetStateResponse): void {
   }
 }
 
-// Ticks a countdown, then reloads once it runs out: asking the background for state is
-// what applies a due change, so the row moves on instead of sitting at 0m 00s.
 function startCountdown(el: HTMLElement, until: number): void {
-  const render = (): void => {
-    el.textContent = fmtCountdown(until - Date.now());
-  };
-  render();
-
-  const id = setInterval(() => {
-    render();
-    if (until <= Date.now()) void reload();
-  }, 1000) as unknown as number;
-  countdownTimers.push(id);
+  startUiCountdown(el, until, () => void reload());
 }
 
 const FIELD_CLASS =
@@ -189,26 +108,12 @@ function buildSiteRow(
   domainEl.textContent = domain;
   row.appendChild(domainEl);
 
-  // Making a site focus only loosens it, so that is refused while anything is blocked.
-  const chipInert = !focusOnly && s.isBlocking;
-  const chip = document.createElement("button");
-  chip.className = `ml-auto shrink-0 px-1.5 rounded border text-xs transition-colors ${
-    focusOnly
-      ? "bg-orange-500/15 border-orange-500/30 text-orange-300"
-      : "bg-slate-700/40 border-slate-600/40 text-slate-400"
-  } ${chipInert ? "opacity-50 cursor-not-allowed" : focusOnly ? "hover:bg-orange-500/25" : "hover:bg-slate-600/60"}`;
-  chip.textContent = focusOnly ? "focus only" : "always";
-  chip.disabled = chipInert;
-  chip.title = chipInert
-    ? "Can't switch to focus only while blocking is on."
-    : focusOnly
-      ? "Blocked only in focus sessions. Click to block it in scheduled windows too."
-      : "Blocked in scheduled windows and focus sessions. Click to block it only in focus sessions.";
-  chip.addEventListener("click", async () => {
-    await sendMessage({ type: "SET_FOCUS_ONLY", domain, focusOnly: !focusOnly });
-    await reload();
-  });
-  row.appendChild(chip);
+  if (focusOnly) {
+    const tag = document.createElement("span");
+    tag.className = "ml-auto shrink-0 text-xs text-slate-500";
+    tag.textContent = "focus only";
+    row.appendChild(tag);
+  }
 
   if (!locked) {
     // Instant remove button
@@ -407,291 +312,6 @@ function initFocus(): void {
   });
 }
 
-// ── schedule tab ──────────────────────────────────────────────────────────────
-
-function renderSchedule(s: GetStateResponse): void {
-  renderWindows(s);
-  renderPendingSettings(s.pendingSettingsChange);
-
-  const delayInput = document.getElementById("delay-input") as HTMLInputElement;
-  delayInput.value = String(Math.round(s.frictionDelayMs / 60000));
-
-  // Dim schedule controls when a pending change is queued
-  const locked = s.pendingSettingsChange !== null;
-  const windowsList = document.getElementById("windows-list")!;
-  windowsList.classList.toggle("opacity-40", locked);
-  windowsList.classList.toggle("pointer-events-none", locked);
-
-  const addWindowDetails = document.getElementById("add-window-details")!;
-  addWindowDetails.classList.toggle("opacity-40", locked);
-  addWindowDetails.classList.toggle("pointer-events-none", locked);
-
-  const delaySection = document.querySelector<HTMLElement>(".border-t.border-slate-700\\/40");
-  delaySection?.classList.toggle("opacity-40", locked);
-  delaySection?.classList.toggle("pointer-events-none", locked);
-}
-
-function renderWindows(s: GetStateResponse): void {
-  const list = document.getElementById("windows-list")!;
-  const empty = document.getElementById("windows-empty")!;
-  list.innerHTML = "";
-
-  if (s.blockWindows.length === 0) {
-    empty.classList.remove("hidden");
-    return;
-  }
-
-  empty.classList.add("hidden");
-
-  for (let i = 0; i < s.blockWindows.length; i++) {
-    const w = s.blockWindows[i]!;
-    list.appendChild(buildWindowRow(w, i, s));
-  }
-}
-
-function buildWindowRow(w: BlockWindow, index: number, s: GetStateResponse): HTMLLIElement {
-  const li = document.createElement("li");
-  li.className = "flex flex-col gap-1 py-1.5 border-b border-slate-700/30 last:border-0";
-
-  const row = document.createElement("div");
-  row.className = "flex items-center justify-between";
-
-  const label = document.createElement("div");
-  label.className = "flex flex-col";
-
-  const title = document.createElement("span");
-  title.className = "text-sm text-slate-200";
-  title.textContent = w.label || fmtWindow(w);
-
-  const sub = document.createElement("span");
-  sub.className = "text-xs text-slate-500";
-  sub.textContent = fmtWindow(w);
-
-  label.appendChild(title);
-  if (w.label) label.appendChild(sub);
-  row.appendChild(label);
-
-  const removeBtn = document.createElement("button");
-  removeBtn.className =
-    "shrink-0 text-slate-500 hover:text-red-400 transition-colors ml-2 text-base leading-none";
-  removeBtn.textContent = "✕";
-  removeBtn.title = "Remove window";
-
-  const form = document.createElement("div");
-  form.className = "hidden flex-col gap-1.5 mt-1";
-
-  removeBtn.addEventListener("click", async () => {
-    if (!s.isBlocking) {
-      // instant
-      const newWindows = s.blockWindows.filter((_, i) => i !== index);
-      await sendMessage({
-        type: "UPDATE_SETTINGS",
-        blockWindows: newWindows,
-        frictionDelayMs: s.frictionDelayMs,
-      });
-      await reload();
-    } else {
-      form.classList.toggle("hidden");
-      form.classList.toggle("flex");
-    }
-  });
-
-  const textarea = document.createElement("textarea");
-  textarea.rows = 2;
-  textarea.placeholder = "Why do you need this?";
-  textarea.className =
-    "w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-orange-500/60 transition-colors resize-none";
-
-  const confirmBtn = document.createElement("button");
-  confirmBtn.className =
-    "py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium hover:bg-amber-500/30 transition-colors";
-  confirmBtn.textContent = "Queue removal";
-
-  confirmBtn.addEventListener("click", async () => {
-    const reason = textarea.value.trim();
-    if (!reason) {
-      textarea.classList.add("border-red-500/60");
-      return;
-    }
-    const newWindows = s.blockWindows.filter((_, i) => i !== index);
-    const resp = await sendMessage({
-      type: "UPDATE_SETTINGS",
-      blockWindows: newWindows,
-      frictionDelayMs: s.frictionDelayMs,
-      reason,
-    });
-    if ("ok" in resp && !resp.ok) {
-      textarea.value = "";
-      textarea.placeholder = (resp as { error: string }).error;
-    } else {
-      await reload();
-    }
-  });
-
-  form.appendChild(textarea);
-  form.appendChild(confirmBtn);
-
-  row.appendChild(removeBtn);
-  li.appendChild(row);
-  li.appendChild(form);
-  return li;
-}
-
-function renderPendingSettings(pending: PendingSettingsChange | null): void {
-  const banner = document.getElementById("pending-settings-banner")!;
-
-  if (!pending) {
-    banner.classList.add("hidden");
-    return;
-  }
-
-  banner.classList.remove("hidden");
-  startCountdown(document.getElementById("pending-settings-countdown")!, pending.applyAt);
-}
-
-// ── add window form ────────────────────────────────────────────────────────────
-
-function initAddWindowForm(): void {
-  const dayBtns = document.querySelectorAll<HTMLButtonElement>(".day-btn");
-  dayBtns.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const active = btn.classList.contains("bg-orange-500/30");
-      btn.classList.toggle("bg-orange-500/30", !active);
-      btn.classList.toggle("text-orange-300", !active);
-      btn.classList.toggle("border-orange-500/40", !active);
-      btn.classList.toggle("bg-slate-700/40", active);
-      btn.classList.toggle("text-slate-400", active);
-    });
-  });
-
-  const addBtn = document.getElementById("win-add-btn")!;
-  const errEl = document.getElementById("win-error")!;
-
-  addBtn.addEventListener("click", async () => {
-    errEl.classList.add("hidden");
-    errEl.textContent = "";
-
-    const label = (document.getElementById("win-label") as HTMLInputElement).value.trim();
-    const startVal = (document.getElementById("win-start") as HTMLInputElement).value;
-    const endVal = (document.getElementById("win-end") as HTMLInputElement).value;
-
-    const selectedDays: DayOfWeek[] = [];
-    dayBtns.forEach((btn) => {
-      if (btn.classList.contains("bg-orange-500/30")) {
-        selectedDays.push(Number(btn.dataset["day"]) as DayOfWeek);
-      }
-    });
-
-    if (selectedDays.length === 0) {
-      errEl.textContent = "Select at least one day.";
-      errEl.classList.remove("hidden");
-      return;
-    }
-
-    if (!startVal || !endVal) {
-      errEl.textContent = "Set start and end times.";
-      errEl.classList.remove("hidden");
-      return;
-    }
-
-    const [startHour, startMin] = startVal.split(":").map(Number) as [number, number];
-    const [endHour, endMin] = endVal.split(":").map(Number) as [number, number];
-
-    const newWindow: BlockWindow = {
-      label: label || `${fmtTime(startHour, startMin)}–${fmtTime(endHour, endMin)}`,
-      days: selectedDays,
-      startHour,
-      startMin,
-      endHour,
-      endMin,
-    };
-
-    await sendMessage({
-      type: "UPDATE_SETTINGS",
-      blockWindows: [...state!.blockWindows, newWindow],
-      frictionDelayMs: state!.frictionDelayMs,
-    });
-
-    // reset form
-    (document.getElementById("win-label") as HTMLInputElement).value = "";
-    (document.getElementById("win-start") as HTMLInputElement).value = "";
-    (document.getElementById("win-end") as HTMLInputElement).value = "";
-    dayBtns.forEach((btn) => {
-      btn.classList.remove("bg-orange-500/30", "text-orange-300", "border-orange-500/40");
-      btn.classList.add("bg-slate-700/40", "text-slate-400");
-    });
-    (document.getElementById("add-window-details") as HTMLDetailsElement).open = false;
-
-    await reload();
-  });
-}
-
-// ── delay controls ─────────────────────────────────────────────────────────────
-
-function initDelayControls(): void {
-  const saveBtn = document.getElementById("delay-save-btn")!;
-  const delayInput = document.getElementById("delay-input") as HTMLInputElement;
-  const errEl = document.getElementById("delay-error")!;
-  const reasonRow = document.getElementById("delay-reason-row")!;
-  const reasonInput = document.getElementById("delay-reason-input") as HTMLTextAreaElement;
-  const confirmBtn = document.getElementById("delay-confirm-btn")!;
-
-  saveBtn.addEventListener("click", () => {
-    errEl.classList.add("hidden");
-    const minutes = parseInt(delayInput.value, 10);
-
-    if (isNaN(minutes) || minutes < 1) {
-      errEl.textContent = "Enter a valid number of minutes (min 1).";
-      errEl.classList.remove("hidden");
-      return;
-    }
-
-    const s = state!;
-    const newDelayMs = minutes * 60000;
-    const isWeakening = newDelayMs < s.frictionDelayMs;
-
-    if (isWeakening && s.isBlocking) {
-      reasonRow.classList.remove("hidden");
-
-      confirmBtn.onclick = async () => {
-        const reason = reasonInput.value.trim();
-        if (!reason) {
-          reasonInput.classList.add("border-red-500/60");
-          return;
-        }
-        const resp = await sendMessage({
-          type: "UPDATE_SETTINGS",
-          blockWindows: s.blockWindows,
-          frictionDelayMs: newDelayMs,
-          reason,
-        });
-        if ("ok" in resp && !resp.ok) {
-          errEl.textContent = (resp as { error: string }).error;
-          errEl.classList.remove("hidden");
-        } else {
-          reasonRow.classList.add("hidden");
-          reasonInput.value = "";
-          await reload();
-        }
-      };
-    } else {
-      void (async () => {
-        const resp = await sendMessage({
-          type: "UPDATE_SETTINGS",
-          blockWindows: s.blockWindows,
-          frictionDelayMs: newDelayMs,
-        });
-        if ("ok" in resp && !resp.ok) {
-          errEl.textContent = (resp as { error: string }).error;
-          errEl.classList.remove("hidden");
-        } else {
-          await reload();
-        }
-      })();
-    }
-  });
-}
-
 // ── add site ──────────────────────────────────────────────────────────────────
 
 function initAddSite(): void {
@@ -730,15 +350,6 @@ function initAddSite(): void {
   });
 }
 
-// ── cancel settings ───────────────────────────────────────────────────────────
-
-function initCancelSettings(): void {
-  document.getElementById("cancel-settings-btn")!.addEventListener("click", async () => {
-    await sendMessage({ type: "CANCEL_SETTINGS" });
-    await reload();
-  });
-}
-
 // ── status dot ────────────────────────────────────────────────────────────────
 
 function renderStatusDot(s: GetStateResponse): void {
@@ -760,29 +371,22 @@ function renderStatusDot(s: GetStateResponse): void {
 // ── boot ──────────────────────────────────────────────────────────────────────
 
 async function reload(): Promise<void> {
-  clearTimers();
+  clearCountdowns();
   const resp = await sendMessage({ type: "GET_STATE" }).catch(() => null);
   const failed = resp === null || "ok" in resp;
   document.getElementById("load-error")!.classList.toggle("hidden", !failed);
   if (failed) return;
 
-  state = resp;
-  renderStatusDot(state);
-  renderFocus(state);
-  renderSites(state);
-  renderSchedule(state);
+  renderStatusDot(resp);
+  renderFocus(resp);
+  renderSites(resp);
 }
 
-document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    switchTab(btn.dataset["tab"] as "sites" | "schedule");
-  });
+document.getElementById("settings-link")!.addEventListener("click", () => {
+  void chrome.runtime.openOptionsPage();
 });
 
 initAddSite();
 initFocus();
-initCancelSettings();
-initAddWindowForm();
-initDelayControls();
 
 void reload();

@@ -8,12 +8,13 @@ deliberate friction to prevent impulsive disabling. Built with TypeScript + Vite
 ## Project Goals
 
 - Block domains and all their subdomains
-- Time-based blocking windows (user-editable via the popup Schedule tab)
+- Time-based blocking windows (user-editable on the settings page)
 - Ad-hoc focus sessions ("focus for 45 min"); a site can be flagged focus only, so it is
   blocked in sessions but not in scheduled windows
 - Friction layer: weakening changes during a block window require deliberate effort, not a single click
 - Local only — no server, no auth, no backend
-- Clean minimal UI in the popup
+- Clean minimal UI: the popup for things done during the day, a full-tab settings page for
+  things set up once
 
 ---
 
@@ -29,7 +30,7 @@ it causes genuine frustration in a real emergency.
 When the user makes a _weakening_ change during an active block window (remove a site,
 remove/edit a block window, reduce the friction delay), the change is not applied immediately.
 Instead it is queued with the configured delay (default 10 minutes).
-A countdown is shown in the popup. The user can cancel the queued change within that window.
+A countdown is shown in the popup (or on the settings page for a settings change). The user can cancel the queued change within that window.
 After the delay, the change applies automatically via `chrome.alarms`.
 
 Why this works: impulse to check social media dies in 10 minutes. Real emergencies don't.
@@ -41,7 +42,7 @@ The text is never validated — it doesn't need to be. The act of typing it crea
 conscious friction and breaks the autopilot loop.
 
 **3. Schedule-Aware UI States**
-The popup has two distinct modes:
+The popup and the settings page have two distinct modes:
 
 - **Outside block window**: normal UI, add/remove sites freely, edit schedule freely, no friction
 - **Inside block window or focus session**: weakening changes (remove site, remove window, reduce delay,
@@ -93,10 +94,15 @@ focus-guard/
 │   ├── types.ts               — shared TypeScript types
 │   ├── blocked.ts             — blocked page script
 │   ├── blocked.css            — Tailwind entry for blocked page
-│   └── popup/
-│       ├── popup.html
-│       ├── popup.css          — Tailwind entry for popup
-│       └── popup.ts
+│   ├── ui.ts                  — helpers shared by popup and settings page (format, sendMessage, countdowns)
+│   ├── popup/
+│   │   ├── popup.html
+│   │   ├── popup.css          — Tailwind entry for popup
+│   │   └── popup.ts
+│   └── options/               — settings page (manifest options_page)
+│       ├── options.html
+│       ├── options.css        — Tailwind entry + design tokens, keyframes
+│       └── options.ts
 ├── blocked.html               — shown instead of blocked site
 ├── rules.json                 — empty array, baseline for declarativeNetRequest
 ├── icons/
@@ -133,7 +139,7 @@ export const DEFAULT_FRICTION_DELAY_MS = 10 * 60 * 1000; // 10 minutes
 ```
 
 > These values are only used to seed `chrome.storage.sync` on first install.
-> At runtime, all settings are read from storage. Users edit them in the popup Schedule tab.
+> At runtime, all settings are read from storage. Users edit them on the settings page.
 
 ---
 
@@ -198,6 +204,8 @@ export interface StorageSchema {
     "type": "module"
   },
 
+  "options_page": "src/options/options.html",
+
   "action": {
     "default_popup": "src/popup/popup.html",
     "default_icon": {
@@ -240,7 +248,7 @@ export interface StorageSchema {
 
 1. On install/startup: initialise storage with defaults, set up alarms, sync rules
 2. `chrome.alarms.onAlarm` — every minute: apply expired pending removals and pending settings changes
-3. `chrome.runtime.onMessage` — handle popup messages
+3. `chrome.runtime.onMessage` — handle popup and settings page messages
 4. `syncRules()` — rebuild declarativeNetRequest dynamic rules from current blockedSites
 
 ### Subdomain Blocking
@@ -248,7 +256,7 @@ export interface StorageSchema {
 `declarativeNetRequest` urlFilter syntax `||domain.com^` already matches all subdomains
 and the apex domain. No extra work needed — just use that pattern.
 
-### Message API (popup → background)
+### Message API (popup / settings page → background)
 
 | type              | payload                                              | returns                                                                    |
 | ----------------- | ---------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -265,16 +273,19 @@ and the apex domain. No extra work needed — just use that pattern.
 
 ---
 
-## `src/popup/popup.ts` — UI Logic
+## Popup and settings page
 
-### Two tabs
+The popup is for things done during the day; the settings page is for things set up once.
+Both only send messages and reflect state: the background enforces every friction rule.
+Shared helpers live in `src/ui.ts`.
 
-**Sites tab**
+### `src/popup/popup.ts`
+
+- Header: status dot, and a "Settings" link that calls `chrome.runtime.openOptionsPage()`
 - No session: `Focus for [45] min [Start]` row. In a session: a red banner with the time left,
   `+15 min` and `end early` (reason → wait); while an early end waits it shows `ending in` + `cancel`
 - Status banner when in a block window (hidden during a session)
-- List of blocked sites, each with an `always` / `focus only` chip (inert when the click would
-  loosen while blocking)
+- List of blocked sites; focus-only sites carry a quiet `focus only` label (switched on the settings page)
   - Site not blocked right now: ✕ removes instantly
   - Site blocked right now: "Request removal" → intention textarea + "Unblock for N min" → countdown on confirm
     - With a length it is a pass: the site stays on the list, opens after the wait, and is blocked again when the length runs out
@@ -282,15 +293,22 @@ and the apex domain. No extra work needed — just use that pattern.
 - Waiting rows show `15 min pass in Xm Ys [cancel]` or `removal in Xm Ys [cancel]`; an open pass shows `open for Xm Ys [end now]`
 - Add site input — always instant, even during block window (strengthening change)
 
-**Schedule tab**
-- List of block windows with ✕ remove buttons
-  - Outside block window: instant removal
-  - Inside block window: intention textarea → queued
-- "Add block window" expandable form: label, day toggles, start/end time — always instant
-- Friction delay input (minutes) with Save button
-  - Increasing delay: always instant
-  - Reducing delay during block window: intention textarea → queued
-- Pending settings change banner with live countdown and cancel button
+### `src/options/options.ts` — settings page
+
+- Header status pill: `Focus session · ends at HH:MM`, `{label} · ends at HH:MM`, or
+  `Not blocking · next at HH:MM` (`next Mon 09:00` when not today; from `getNextBlockWindowStart`)
+- Pending settings change banner with live countdown and cancel; window and delay controls are
+  inert while one waits
+- **01 Blocked sites**: per site an `Always` / `Focus only` segmented control (`Focus only` inert while
+  blocking), ✕ that removes instantly when the site is not enforced and is inert when it is
+  (removal requests and passes stay in the popup), `removal pending` / `pass pending` / `pass open`
+  text instead of controls, add box
+- **02 Schedule**: week view (bars from `getWeekSegments`; overnight windows in the darker tone,
+  split across two days; today emphasised with a now marker), the window list with ✕ (instant
+  outside a block, reason → queued inside), and an "Add window" button that reveals label, day
+  toggles, start/end — always instant
+- **03 Friction**: removal delay input + Save; reducing it during a block asks for a reason and queues
+- Re-renders on `chrome.storage.onChanged`, and refreshes the clock-driven parts once a minute
 
 ---
 
@@ -363,6 +381,7 @@ npm run dev          # watch mode, rebuilds on save
 - **declarativeNetRequest rule IDs**: must be positive integers, no duplicates. Re-generate all IDs on every sync from array index + 1.
 - **chrome.storage.sync quota**: 8KB per item, 100KB total. Fine for a blocklist, don't store large data.
 - **blocked.html must be in web_accessible_resources**: otherwise the redirect silently fails.
+- **Extension pages cannot run inline scripts**: popup and `options_page` are manifest HTML entries, so CRXJS bundles their scripts; a page only reached by URL (blocked.html) has to be listed in `build.rollupOptions.input` in `vite.config.ts` to get the same.
 - **Popup context vs background context**: popup.ts cannot call chrome.declarativeNetRequest directly in MV3. Always message the background worker.
 - **`||domain^` pattern**: this is uBlock/AdBlock filter syntax that Chrome's declarativeNetRequest also supports. It matches `domain.com`, `www.domain.com`, `api.domain.com`, etc. Do not use regex rules — they require extra permissions.
 - **blocked page domain param**: DNR redirect uses `extensionPath: '/blocked.html?domain=...'` to pass the blocked domain — `document.referrer` is not reliable here.

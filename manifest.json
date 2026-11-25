@@ -15,6 +15,7 @@
     "service_worker": "src/background.ts",
     "type": "module"
   },
+  "options_page": "src/options/options.html",
   "action": {
     "default_popup": "src/popup/popup.html",
     "default_icon": {
