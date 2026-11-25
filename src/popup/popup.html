@@ -59,6 +59,56 @@
         <span id="block-banner-end"></span>
       </div>
 
+      <!-- Focus session: a start row, or a banner while one runs -->
+      <div id="focus-start" class="hidden mb-3">
+        <div class="flex items-center gap-2 text-sm text-slate-400">
+          <label for="focus-minutes">Focus for</label>
+          <input
+            id="focus-minutes"
+            type="number"
+            min="1"
+            step="any"
+            value="45"
+            class="w-16 bg-slate-800/60 border border-slate-700/60 rounded-lg px-2 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-orange-500/60 transition-colors"
+          />
+          <span>min</span>
+          <button
+            id="focus-start-btn"
+            class="ml-auto px-3 py-1.5 rounded-lg bg-orange-500/20 border border-orange-500/30 text-orange-300 text-sm font-medium hover:bg-orange-500/30 transition-colors"
+          >Start</button>
+        </div>
+        <p id="focus-start-error" class="hidden mt-1 text-xs text-red-400"></p>
+      </div>
+
+      <div id="focus-banner" class="hidden mb-3 px-3 py-2 rounded-lg bg-red-950/50 border border-red-800/40 text-xs text-red-300">
+        <div class="flex items-center justify-between gap-2">
+          <span class="whitespace-nowrap">
+            <span class="font-semibold">Focus</span>
+            <span class="text-red-400/70 mx-1">·</span>
+            <span id="focus-banner-status" class="font-mono"></span>
+          </span>
+          <span class="flex gap-2 shrink-0">
+            <button id="focus-extend-btn" class="text-red-400 hover:text-red-200 transition-colors">+15 min</button>
+            <button id="focus-end-btn" class="text-red-400 hover:text-red-200 transition-colors">end early</button>
+            <button id="focus-cancel-end-btn" class="text-red-400 hover:text-red-200 transition-colors">cancel</button>
+          </span>
+        </div>
+        <div id="focus-end-form" class="hidden flex-col gap-1.5 mt-2">
+          <textarea
+            id="focus-end-reason"
+            rows="2"
+            placeholder="Why end it now?"
+            aria-label="Reason for ending the focus session early"
+            class="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-orange-500/60 transition-colors resize-none"
+          ></textarea>
+          <p id="focus-end-error" class="hidden text-xs text-red-400"></p>
+          <button
+            id="focus-end-confirm"
+            class="py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium hover:bg-amber-500/30 transition-colors"
+          ></button>
+        </div>
+      </div>
+
       <!-- Sites list -->
       <ul id="sites-list" class="space-y-1 mb-3"></ul>
 

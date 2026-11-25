@@ -117,13 +117,47 @@ export function isPassOpen(removal: PendingRemoval, nowMs: number = Date.now()):
   return removal.reblockAt !== undefined && removal.applyAt <= nowMs && nowMs < removal.reblockAt;
 }
 
-// The one answer to "what is blocked right now": nothing outside a window, and inside one,
-// the list minus any site with an open pass. Rules and tab checks both read this.
+export function isFocusSessionActive(
+  storage: Pick<StorageSchema, "focusSession">,
+  nowMs: number = Date.now(),
+): boolean {
+  return storage.focusSession !== null && nowMs < storage.focusSession.endsAt;
+}
+
+// Whether weakening changes cost friction right now.
+export function isBlockingNow(
+  storage: Pick<StorageSchema, "focusSession" | "blockWindows">,
+  now: Date = new Date(),
+): boolean {
+  return isFocusSessionActive(storage, now.getTime()) || isInBlockWindow(now, storage.blockWindows);
+}
+
+// Whether removing this site costs friction right now: a focus-only site is not blocked in
+// a plain scheduled window, so it can go instantly there.
+export function isSiteEnforced(
+  storage: Pick<StorageSchema, "focusSession" | "blockWindows" | "focusOnlySites">,
+  domain: string,
+  now: Date = new Date(),
+): boolean {
+  return (
+    isFocusSessionActive(storage, now.getTime()) ||
+    (isInBlockWindow(now, storage.blockWindows) && !storage.focusOnlySites.includes(domain))
+  );
+}
+
+// The one answer to "what is blocked right now": nothing outside a window or session; in a
+// session the whole list, in a window only the list minus focus-only sites; and in both,
+// minus any site with an open pass. Rules and tab checks both read this.
 export function getActiveBlockedSites(
-  storage: Pick<StorageSchema, "blockedSites" | "blockWindows" | "pendingRemovals">,
+  storage: Pick<
+    StorageSchema,
+    "blockedSites" | "blockWindows" | "pendingRemovals" | "focusOnlySites" | "focusSession"
+  >,
   now: Date = new Date(),
 ): string[] {
-  if (!isInBlockWindow(now, storage.blockWindows)) {
+  const inSession = isFocusSessionActive(storage, now.getTime());
+
+  if (!inSession && !isInBlockWindow(now, storage.blockWindows)) {
     return [];
   }
 
@@ -133,18 +167,21 @@ export function getActiveBlockedSites(
       .map((removal) => removal.domain),
   );
 
-  return storage.blockedSites.filter((site) => !openDomains.has(site));
+  return storage.blockedSites.filter(
+    (site) => !openDomains.has(site) && (inSession || !storage.focusOnlySites.includes(site)),
+  );
 }
 
 // When the next queued change is due, so the background can wake exactly then instead of
 // on its once-a-minute tick.
 export function getNextPendingChangeAt(
-  storage: Pick<StorageSchema, "pendingRemovals" | "pendingSettingsChange">,
+  storage: Pick<StorageSchema, "pendingRemovals" | "pendingSettingsChange" | "focusSession">,
   nowMs: number = Date.now(),
 ): number | null {
   const upcoming = [
     ...storage.pendingRemovals.flatMap((removal) => [removal.applyAt, removal.reblockAt]),
     storage.pendingSettingsChange?.applyAt,
+    storage.focusSession?.endsAt,
   ].filter((time): time is number => time !== undefined && time > nowMs);
 
   return upcoming.length > 0 ? Math.min(...upcoming) : null;
@@ -215,6 +252,8 @@ export function removeDomainFromState(storage: StorageSchema, domain: string): S
     ...storage,
     blockedSites,
     pendingRemovals,
+    // Otherwise a site removed and added back later would quietly return as focus only.
+    focusOnlySites: storage.focusOnlySites.filter((site) => site !== normalizedDomain),
   };
 }
 
@@ -366,5 +405,81 @@ export function applyPendingRemovalsToState(
     ...storage,
     blockedSites: storage.blockedSites.filter((blockedSite) => !removedDomains.has(blockedSite)),
     pendingRemovals,
+    focusOnlySites: storage.focusOnlySites.filter((site) => !removedDomains.has(site)),
+  };
+}
+
+// Starts a session, or extends a running one from its real end. Extending only strengthens,
+// so it also drops a pending early end.
+export function startFocusSession(
+  storage: StorageSchema,
+  minutes: number,
+  nowMs: number = Date.now(),
+): StorageSchema {
+  const session = isFocusSessionActive(storage, nowMs) ? storage.focusSession : null;
+  const from = session === null ? nowMs : (session.endingEarly?.originalEndsAt ?? session.endsAt);
+
+  return { ...storage, focusSession: { endsAt: from + minutes * 60_000 } };
+}
+
+export function requestFocusSessionEnd(
+  storage: StorageSchema,
+  reason: string,
+  nowMs: number = Date.now(),
+): StorageSchema {
+  const session = storage.focusSession;
+  const endsAt = nowMs + storage.frictionDelayMs;
+
+  // A wait that would not end it sooner also covers a session that has already ended.
+  if (session === null || session.endingEarly !== undefined || endsAt >= session.endsAt) {
+    return storage;
+  }
+
+  return {
+    ...storage,
+    focusSession: { endsAt, endingEarly: { reason: reason.trim(), originalEndsAt: session.endsAt } },
+  };
+}
+
+export function cancelFocusSessionEnd(storage: StorageSchema): StorageSchema {
+  const endingEarly = storage.focusSession?.endingEarly;
+
+  if (endingEarly === undefined) {
+    return storage;
+  }
+
+  return { ...storage, focusSession: { endsAt: endingEarly.originalEndsAt } };
+}
+
+export function clearEndedFocusSession(
+  storage: StorageSchema,
+  nowMs: number = Date.now(),
+): StorageSchema {
+  if (storage.focusSession === null || storage.focusSession.endsAt > nowMs) {
+    return storage;
+  }
+
+  return { ...storage, focusSession: null };
+}
+
+export function setFocusOnly(
+  storage: StorageSchema,
+  domain: string,
+  focusOnly: boolean,
+): StorageSchema {
+  const normalizedDomain = normalizeDomain(domain);
+
+  if (
+    !storage.blockedSites.includes(normalizedDomain) ||
+    storage.focusOnlySites.includes(normalizedDomain) === focusOnly
+  ) {
+    return storage;
+  }
+
+  return {
+    ...storage,
+    focusOnlySites: focusOnly
+      ? [...storage.focusOnlySites, normalizedDomain]
+      : storage.focusOnlySites.filter((site) => site !== normalizedDomain),
   };
 }

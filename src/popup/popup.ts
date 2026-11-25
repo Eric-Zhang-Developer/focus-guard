@@ -81,7 +81,7 @@ function renderSites(s: GetStateResponse): void {
   list.innerHTML = "";
 
   const banner = document.getElementById("block-banner")!;
-  if (s.isBlocking && s.activeWindow) {
+  if (s.isBlocking && s.activeWindow && !s.focusSession) {
     banner.classList.remove("hidden");
     document.getElementById("block-banner-label")!.textContent = s.activeWindow.label;
     document.getElementById("block-banner-end")!.textContent =
@@ -99,7 +99,7 @@ function renderSites(s: GetStateResponse): void {
 
   for (const domain of s.sites) {
     const pending = s.pendingRemovals.find((r) => r.domain === domain) ?? null;
-    list.appendChild(buildSiteRow(domain, pending, s.isBlocking, s.frictionDelayMs));
+    list.appendChild(buildSiteRow(domain, pending, s));
   }
 }
 
@@ -124,8 +124,7 @@ const FIELD_CLASS =
 function buildSiteRow(
   domain: string,
   pending: PendingRemoval | null,
-  isBlocking: boolean,
-  frictionDelayMs: number,
+  s: GetStateResponse,
 ): HTMLLIElement {
   const li = document.createElement("li");
   li.className = "flex flex-col gap-1 py-1.5 border-b border-slate-700/30 last:border-0";
@@ -177,15 +176,41 @@ function buildSiteRow(
     return li;
   }
 
+  const focusOnly = s.focusOnlySites.includes(domain);
+  // Same answer as the background's isSiteEnforced: a focus-only site is open in a plain
+  // window, so it can be removed there without a wait.
+  const locked = s.isBlocking && (s.focusSession !== null || !focusOnly);
+
   const row = document.createElement("div");
   row.className = "flex items-center justify-between";
 
   const domainEl = document.createElement("span");
-  domainEl.className = "text-sm text-slate-200 truncate";
+  domainEl.className = `text-sm truncate ${focusOnly && !s.focusSession ? "text-slate-500" : "text-slate-200"}`;
   domainEl.textContent = domain;
   row.appendChild(domainEl);
 
-  if (!isBlocking) {
+  // Making a site focus only loosens it, so that is refused while anything is blocked.
+  const chipInert = !focusOnly && s.isBlocking;
+  const chip = document.createElement("button");
+  chip.className = `ml-auto shrink-0 px-1.5 rounded border text-xs transition-colors ${
+    focusOnly
+      ? "bg-orange-500/15 border-orange-500/30 text-orange-300"
+      : "bg-slate-700/40 border-slate-600/40 text-slate-400"
+  } ${chipInert ? "opacity-50 cursor-not-allowed" : focusOnly ? "hover:bg-orange-500/25" : "hover:bg-slate-600/60"}`;
+  chip.textContent = focusOnly ? "focus only" : "always";
+  chip.disabled = chipInert;
+  chip.title = chipInert
+    ? "Can't switch to focus only while blocking is on."
+    : focusOnly
+      ? "Blocked only in focus sessions. Click to block it in scheduled windows too."
+      : "Blocked in scheduled windows and focus sessions. Click to block it only in focus sessions.";
+  chip.addEventListener("click", async () => {
+    await sendMessage({ type: "SET_FOCUS_ONLY", domain, focusOnly: !focusOnly });
+    await reload();
+  });
+  row.appendChild(chip);
+
+  if (!locked) {
     // Instant remove button
     const removeBtn = document.createElement("button");
     removeBtn.className =
@@ -236,7 +261,7 @@ function buildSiteRow(
   const confirmBtn = document.createElement("button");
   confirmBtn.className =
     "py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium hover:bg-amber-500/30 transition-colors";
-  confirmBtn.textContent = `Start ${Math.round(frictionDelayMs / 60000)} min wait`;
+  confirmBtn.textContent = `Start ${Math.round(s.frictionDelayMs / 60000)} min wait`;
 
   form.append(textarea, lengthRow, hint, errEl, confirmBtn);
 
@@ -283,6 +308,103 @@ function buildSiteRow(
   li.appendChild(row);
   li.appendChild(form);
   return li;
+}
+
+// ── focus session ─────────────────────────────────────────────────────────────
+
+function renderFocus(s: GetStateResponse): void {
+  const session = s.focusSession;
+  const ending = session?.endingEarly !== undefined;
+  const form = document.getElementById("focus-end-form")!;
+
+  document.getElementById("focus-start")!.classList.toggle("hidden", session !== null);
+  document.getElementById("focus-banner")!.classList.toggle("hidden", session === null);
+  document.getElementById("focus-extend-btn")!.classList.toggle("hidden", ending);
+  document.getElementById("focus-end-btn")!.classList.toggle("hidden", ending);
+  document.getElementById("focus-cancel-end-btn")!.classList.toggle("hidden", !ending);
+  document.getElementById("focus-end-confirm")!.textContent =
+    `Start ${Math.round(s.frictionDelayMs / 60000)} min wait`;
+
+  if (session === null || ending) {
+    form.classList.add("hidden");
+    form.classList.remove("flex");
+  }
+
+  if (session === null) return;
+
+  const countdown = document.createElement("span");
+  const status = document.getElementById("focus-banner-status")!;
+  if (ending) status.replaceChildren("ending in ", countdown);
+  else status.replaceChildren(countdown, " left");
+  startCountdown(countdown, session.endsAt);
+}
+
+function initFocus(): void {
+  const minutesInput = document.getElementById("focus-minutes") as HTMLInputElement;
+  const startErr = document.getElementById("focus-start-error")!;
+  const form = document.getElementById("focus-end-form")!;
+  const reasonInput = document.getElementById("focus-end-reason") as HTMLTextAreaElement;
+  const endErr = document.getElementById("focus-end-error")!;
+
+  const showError = (el: HTMLElement, message: string): void => {
+    el.textContent = message;
+    el.classList.remove("hidden");
+  };
+
+  minutesInput.addEventListener("input", () => startErr.classList.add("hidden"));
+
+  document.getElementById("focus-start-btn")!.addEventListener("click", async () => {
+    const minutes = Number(minutesInput.value.trim());
+    // An empty box with invalid typed text also reads as "", so check the browser's verdict too.
+    if (!minutesInput.validity.valid || !(minutes > 0)) {
+      showError(startErr, "Enter a number of minutes.");
+      return;
+    }
+
+    const resp = await sendMessage({ type: "START_FOCUS", minutes });
+    if ("ok" in resp && !resp.ok) {
+      showError(startErr, resp.error);
+      return;
+    }
+    await reload();
+  });
+
+  document.getElementById("focus-extend-btn")!.addEventListener("click", async () => {
+    await sendMessage({ type: "START_FOCUS", minutes: 15 });
+    await reload();
+  });
+
+  document.getElementById("focus-end-btn")!.addEventListener("click", () => {
+    form.classList.toggle("hidden");
+    form.classList.toggle("flex");
+  });
+
+  document.getElementById("focus-cancel-end-btn")!.addEventListener("click", async () => {
+    await sendMessage({ type: "CANCEL_END_FOCUS" });
+    await reload();
+  });
+
+  reasonInput.addEventListener("input", () => {
+    endErr.classList.add("hidden");
+    reasonInput.classList.remove("border-red-500/60");
+  });
+
+  document.getElementById("focus-end-confirm")!.addEventListener("click", async () => {
+    const reason = reasonInput.value.trim();
+    if (!reason) {
+      reasonInput.classList.add("border-red-500/60");
+      showError(endErr, "Enter a reason first.");
+      return;
+    }
+
+    const resp = await sendMessage({ type: "END_FOCUS", reason });
+    if ("ok" in resp && !resp.ok) {
+      showError(endErr, resp.error);
+      return;
+    }
+    reasonInput.value = "";
+    await reload();
+  });
 }
 
 // ── schedule tab ──────────────────────────────────────────────────────────────
@@ -623,10 +745,12 @@ function renderStatusDot(s: GetStateResponse): void {
   const dot = document.getElementById("status-dot")!;
   const label = document.getElementById("status-label")!;
 
-  if (s.isBlocking && s.activeWindow) {
+  const text = s.focusSession ? "Focus session" : s.activeWindow?.label;
+
+  if (s.isBlocking && text !== undefined) {
     dot.classList.remove("hidden");
     dot.classList.add("flex");
-    label.textContent = s.activeWindow.label;
+    label.textContent = text;
   } else {
     dot.classList.add("hidden");
     dot.classList.remove("flex");
@@ -644,6 +768,7 @@ async function reload(): Promise<void> {
 
   state = resp;
   renderStatusDot(state);
+  renderFocus(state);
   renderSites(state);
   renderSchedule(state);
 }
@@ -655,6 +780,7 @@ document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
 });
 
 initAddSite();
+initFocus();
 initCancelSettings();
 initAddWindowForm();
 initDelayControls();
